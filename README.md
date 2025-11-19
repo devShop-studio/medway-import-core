@@ -65,6 +65,7 @@ async function handleImport() {
 - ESM-only build (`type: module`) for modern bundlers and Metro; no Node-only APIs.
 - XLSX parsing uses `xlsx` in array mode (`type: "array"`), no `fs` usage.
 - CSV parsing is a small, dependency-free parser.
+ - Header semantics: generic CSVs are mapped via a synonyms + type-aware matcher. You can inspect suggested mappings by importing `suggestHeaderMappings`.
 
 ## Changes (documentation)
 
@@ -72,5 +73,9 @@ async function handleImport() {
 - Updated `package.json` with `files` and `devDependencies.typescript`.
 - Made `tsconfig.json` standalone and strict.
 - Relaxed identity validation: only validate identity codes when provided, and treat identity errors as non-fatal; `coo` issues reported under `identity.coo`.
+- Added CLI tester: `npm run parse-file <path>` prints schema, counts, sample rows, and errors.
+- Added minimal tests: `npm test` runs CSV and XLSX template fixtures to prevent regressions.
+- Added header semantics module to improve generic CSV mapping using synonyms and data type checks.
+ - Relaxed sanitizer gating: rows are kept when product identity exists; stock/identity errors are non-fatal and surfaced for UI decisions.
 
 Signed: EyosiyasJ

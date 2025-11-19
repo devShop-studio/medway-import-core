@@ -2,6 +2,7 @@
 export interface CanonicalProduct {
   product: {
     generic_name: string;
+    brand_name?: string | null;
     strength: string;
     form: string;
     category?: string | null;

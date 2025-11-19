@@ -452,6 +452,12 @@ export function sanitizeCanonicalRow(
 
   if (!row) return { row: null, errors };
 
+  const hasGeneric = Boolean(row.generic_name && row.generic_name.trim());
+  const hasBrand = Boolean(row.brand_name && String(row.brand_name).trim());
+  if (!hasGeneric && !hasBrand) {
+    return { row: null, errors };
+  }
+
   const expiryIso = parseDateFlexible(row.expiry_date);
   if (expiryIso) {
     if (!isFutureDate(expiryIso)) {
@@ -461,14 +467,12 @@ export function sanitizeCanonicalRow(
     errors.push({ row: rowIndex, field: "batch.expiry_date", code: "invalid_format", message: "Cannot parse expiry date" });
   }
 
-  const fatal = errors.some((e) =>
-    (e.code.startsWith("E_") || e.code === "missing_required") && !e.field.startsWith("identity.")
-  );
-  if (fatal) return { row: null, errors };
+  // Do not hard-drop on stock/identity errors; apps decide readiness.
 
   const canonical: CanonicalProduct = {
     product: {
       generic_name: row.generic_name ?? "",
+      brand_name: (row.brand_name ?? null) ?? null,
       strength: row.strength ?? "",
       form: row.form ?? "",
       category: row.category ?? null,

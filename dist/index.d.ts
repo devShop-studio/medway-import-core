@@ -1,4 +1,5 @@
 import { parseProductsCore } from "./parseProductsCore.js";
+export { suggestHeaderMappings } from "./semantics.js";
 import type { ParsedImportResult } from "./types.js";
 export * from "./types.js";
 export * from "./sanitize.js";

@@ -1,6 +1,7 @@
 import { parseProductsCore } from "./parseProductsCore.js";
 import { parseCsvToRows } from "./csv.js";
 import { readXlsxToRows } from "./xlsx.js";
+export { suggestHeaderMappings } from "./semantics.js";
 export * from "./types.js";
 export * from "./sanitize.js";
 export { parseProductsCore };

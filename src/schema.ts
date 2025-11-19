@@ -1,5 +1,6 @@
 import { RawRow } from "./csv.js";
 import { CanonicalProduct, SourceSchema } from "./types.js";
+import { suggestHeaderMappings } from "./semantics.js";
 
 const TEMPLATE_V3_HEADERS = [
   "Generic (International Name)",
@@ -48,6 +49,7 @@ const TEMPLATE_CHECKSUM = "b6ba6708";
 
 type CanonicalFlat = {
   generic_name?: string;
+  brand_name?: string | null;
   strength?: string;
   form?: string;
   category?: string | null;
@@ -63,6 +65,13 @@ type CanonicalFlat = {
 };
 
 const HEADER_SYNONYMS: Record<keyof CanonicalFlat, string[]> = {
+  brand_name: [
+    "brand",
+    "brand_name",
+    "trade_name",
+    "commercial_name",
+    "product_name",
+  ],
   generic_name: [
     "generic",
     "generic_name",
@@ -352,6 +361,7 @@ function isRowEmpty(raw: RawRow): boolean {
 function ensureCanonical(flat: CanonicalFlat): Partial<CanonicalProduct> {
   const product: CanonicalProduct["product"] = {
     generic_name: flat.generic_name ?? "",
+    brand_name: flat.brand_name ?? null,
     strength: flat.strength ?? "",
     form: flat.form ?? "",
     category: flat.category ?? null,
@@ -395,19 +405,54 @@ function mapTemplateV3Row(raw: RawRow): Partial<CanonicalProduct> {
 
 function mapCsvGenericRow(raw: RawRow): Partial<CanonicalProduct> {
   const flat: CanonicalFlat = {};
-  const assignField = <K extends keyof CanonicalFlat>(
-    key: K,
-    value: CanonicalFlat[K]
-  ) => {
+  const headers = Object.keys(raw);
+  const sampleRows: RawRow[] = [raw];
+  const hints = suggestHeaderMappings(headers, sampleRows);
+  const mapFromHint = (header: string): keyof CanonicalFlat | undefined => {
+    const hint = hints.find((h) => h.header === header && h.key);
+    switch (hint?.key) {
+      case "generic_name":
+        return "generic_name";
+      case "brand_name":
+        return "brand_name";
+      case "strength":
+        return "strength";
+      case "form":
+        return "form";
+      case "category":
+        return "category";
+      case "expiry_date":
+        return "expiry_date";
+      case "batch_no":
+        return "batch_no";
+      case "pack_contents":
+        return "pkg"; // approximate to package code/pieces
+      case "on_hand":
+        return "on_hand";
+      case "unit_price":
+        return "unit_price";
+      case "coo":
+        return "coo";
+      case "sku":
+        return "sku";
+      case "manufacturer":
+        return undefined;
+      case "notes":
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+
+  const assignField = <K extends keyof CanonicalFlat>(key: K, value: CanonicalFlat[K]) => {
     flat[key] = value;
   };
 
   for (const [key, value] of Object.entries(raw)) {
-    const norm = normalizeHeaderKey(key);
-    let mapped: keyof CanonicalFlat | undefined = norm;
+    let mapped: keyof CanonicalFlat | undefined = mapFromHint(key) ?? normalizeHeaderKey(key);
     if (!mapped) {
       const best = fuzzyHeaderMap(key);
-      if (best.score >= 0.75) mapped = best.key;
+      if (best.score >= 0.8) mapped = best.key;
     }
     if (!mapped) continue;
     const val = value;

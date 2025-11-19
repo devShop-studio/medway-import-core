@@ -377,7 +377,7 @@ const mapIssueToParsed = (issue, rowIndex) => {
     return { row: rowIndex, field: fieldPath, code: issue.code, message: issue.msg };
 };
 export function sanitizeCanonicalRow(raw, rowIndex) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5, _6;
     const flat = {
         generic_name: (_a = raw.product) === null || _a === void 0 ? void 0 : _a.generic_name,
         strength: (_b = raw.product) === null || _b === void 0 ? void 0 : _b.strength,
@@ -397,6 +397,11 @@ export function sanitizeCanonicalRow(raw, rowIndex) {
     const errors = issues.map((i) => mapIssueToParsed(i, rowIndex));
     if (!row)
         return { row: null, errors };
+    const hasGeneric = Boolean(row.generic_name && row.generic_name.trim());
+    const hasBrand = Boolean(row.brand_name && String(row.brand_name).trim());
+    if (!hasGeneric && !hasBrand) {
+        return { row: null, errors };
+    }
     const expiryIso = parseDateFlexible(row.expiry_date);
     if (expiryIso) {
         if (!isFutureDate(expiryIso)) {
@@ -406,32 +411,31 @@ export function sanitizeCanonicalRow(raw, rowIndex) {
     else if (row.expiry_date) {
         errors.push({ row: rowIndex, field: "batch.expiry_date", code: "invalid_format", message: "Cannot parse expiry date" });
     }
-    const fatal = errors.some((e) => (e.code.startsWith("E_") || e.code === "missing_required") && !e.field.startsWith("identity."));
-    if (fatal)
-        return { row: null, errors };
+    // Do not hard-drop on stock/identity errors; apps decide readiness.
     const canonical = {
         product: {
             generic_name: (_s = row.generic_name) !== null && _s !== void 0 ? _s : "",
-            strength: (_t = row.strength) !== null && _t !== void 0 ? _t : "",
-            form: (_u = row.form) !== null && _u !== void 0 ? _u : "",
-            category: (_v = row.category) !== null && _v !== void 0 ? _v : null,
+            brand_name: (_u = ((_t = row.brand_name) !== null && _t !== void 0 ? _t : null)) !== null && _u !== void 0 ? _u : null,
+            strength: (_v = row.strength) !== null && _v !== void 0 ? _v : "",
+            form: (_w = row.form) !== null && _w !== void 0 ? _w : "",
+            category: (_x = row.category) !== null && _x !== void 0 ? _x : null,
         },
         batch: {
-            batch_no: (_w = row.batch_no) !== null && _w !== void 0 ? _w : "",
+            batch_no: (_y = row.batch_no) !== null && _y !== void 0 ? _y : "",
             expiry_date: expiryIso !== null && expiryIso !== void 0 ? expiryIso : "",
-            on_hand: (_x = row.on_hand) !== null && _x !== void 0 ? _x : 0,
-            unit_price: (_y = row.unit_price) !== null && _y !== void 0 ? _y : null,
-            coo: (_z = row.coo) !== null && _z !== void 0 ? _z : null,
+            on_hand: (_z = row.on_hand) !== null && _z !== void 0 ? _z : 0,
+            unit_price: (_0 = row.unit_price) !== null && _0 !== void 0 ? _0 : null,
+            coo: (_1 = row.coo) !== null && _1 !== void 0 ? _1 : null,
         },
     };
     const identityHasValues = Boolean(row.cat || row.frm || row.pkg || row.coo || row.sku);
     if (identityHasValues) {
         canonical.identity = {
-            cat: (_0 = row.cat) !== null && _0 !== void 0 ? _0 : null,
-            frm: (_1 = row.frm) !== null && _1 !== void 0 ? _1 : null,
-            pkg: (_2 = row.pkg) !== null && _2 !== void 0 ? _2 : null,
-            coo: (_3 = row.coo) !== null && _3 !== void 0 ? _3 : null,
-            sku: (_4 = row.sku) !== null && _4 !== void 0 ? _4 : null,
+            cat: (_2 = row.cat) !== null && _2 !== void 0 ? _2 : null,
+            frm: (_3 = row.frm) !== null && _3 !== void 0 ? _3 : null,
+            pkg: (_4 = row.pkg) !== null && _4 !== void 0 ? _4 : null,
+            coo: (_5 = row.coo) !== null && _5 !== void 0 ? _5 : null,
+            sku: (_6 = row.sku) !== null && _6 !== void 0 ? _6 : null,
         };
     }
     return { row: canonical, errors };

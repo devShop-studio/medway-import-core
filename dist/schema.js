@@ -1,3 +1,4 @@
+import { suggestHeaderMappings } from "./semantics.js";
 const TEMPLATE_V3_HEADERS = [
     "Generic (International Name)",
     "Strength",
@@ -41,6 +42,13 @@ const LEGACY_ITEMS_HEADERS = [
 const TEMPLATE_VERSION = "MedWay_Template_v3";
 const TEMPLATE_CHECKSUM = "b6ba6708";
 const HEADER_SYNONYMS = {
+    brand_name: [
+        "brand",
+        "brand_name",
+        "trade_name",
+        "commercial_name",
+        "product_name",
+    ],
     generic_name: [
         "generic",
         "generic_name",
@@ -290,27 +298,28 @@ function isRowEmpty(raw) {
     });
 }
 function ensureCanonical(flat) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q;
     const product = {
         generic_name: (_a = flat.generic_name) !== null && _a !== void 0 ? _a : "",
-        strength: (_b = flat.strength) !== null && _b !== void 0 ? _b : "",
-        form: (_c = flat.form) !== null && _c !== void 0 ? _c : "",
-        category: (_d = flat.category) !== null && _d !== void 0 ? _d : null,
+        brand_name: (_b = flat.brand_name) !== null && _b !== void 0 ? _b : null,
+        strength: (_c = flat.strength) !== null && _c !== void 0 ? _c : "",
+        form: (_d = flat.form) !== null && _d !== void 0 ? _d : "",
+        category: (_e = flat.category) !== null && _e !== void 0 ? _e : null,
     };
     const batch = {
-        batch_no: (_e = flat.batch_no) !== null && _e !== void 0 ? _e : "",
-        expiry_date: (_f = flat.expiry_date) !== null && _f !== void 0 ? _f : "",
-        on_hand: (_g = flat.on_hand) !== null && _g !== void 0 ? _g : 0,
-        unit_price: (_h = flat.unit_price) !== null && _h !== void 0 ? _h : null,
-        coo: (_j = flat.coo) !== null && _j !== void 0 ? _j : null,
+        batch_no: (_f = flat.batch_no) !== null && _f !== void 0 ? _f : "",
+        expiry_date: (_g = flat.expiry_date) !== null && _g !== void 0 ? _g : "",
+        on_hand: (_h = flat.on_hand) !== null && _h !== void 0 ? _h : 0,
+        unit_price: (_j = flat.unit_price) !== null && _j !== void 0 ? _j : null,
+        coo: (_k = flat.coo) !== null && _k !== void 0 ? _k : null,
     };
     const identity = flat.cat || flat.frm || flat.pkg || flat.coo || flat.sku
         ? {
-            cat: (_k = flat.cat) !== null && _k !== void 0 ? _k : null,
-            frm: (_l = flat.frm) !== null && _l !== void 0 ? _l : null,
-            pkg: (_m = flat.pkg) !== null && _m !== void 0 ? _m : null,
-            coo: (_o = flat.coo) !== null && _o !== void 0 ? _o : null,
-            sku: (_p = flat.sku) !== null && _p !== void 0 ? _p : null,
+            cat: (_l = flat.cat) !== null && _l !== void 0 ? _l : null,
+            frm: (_m = flat.frm) !== null && _m !== void 0 ? _m : null,
+            pkg: (_o = flat.pkg) !== null && _o !== void 0 ? _o : null,
+            coo: (_p = flat.coo) !== null && _p !== void 0 ? _p : null,
+            sku: (_q = flat.sku) !== null && _q !== void 0 ? _q : null,
         }
         : undefined;
     return { product, batch, identity };
@@ -332,16 +341,54 @@ function mapTemplateV3Row(raw) {
     return ensureCanonical(flat);
 }
 function mapCsvGenericRow(raw) {
+    var _a;
     const flat = {};
+    const headers = Object.keys(raw);
+    const sampleRows = [raw];
+    const hints = suggestHeaderMappings(headers, sampleRows);
+    const mapFromHint = (header) => {
+        const hint = hints.find((h) => h.header === header && h.key);
+        switch (hint === null || hint === void 0 ? void 0 : hint.key) {
+            case "generic_name":
+                return "generic_name";
+            case "brand_name":
+                return "brand_name";
+            case "strength":
+                return "strength";
+            case "form":
+                return "form";
+            case "category":
+                return "category";
+            case "expiry_date":
+                return "expiry_date";
+            case "batch_no":
+                return "batch_no";
+            case "pack_contents":
+                return "pkg"; // approximate to package code/pieces
+            case "on_hand":
+                return "on_hand";
+            case "unit_price":
+                return "unit_price";
+            case "coo":
+                return "coo";
+            case "sku":
+                return "sku";
+            case "manufacturer":
+                return undefined;
+            case "notes":
+                return undefined;
+            default:
+                return undefined;
+        }
+    };
     const assignField = (key, value) => {
         flat[key] = value;
     };
     for (const [key, value] of Object.entries(raw)) {
-        const norm = normalizeHeaderKey(key);
-        let mapped = norm;
+        let mapped = (_a = mapFromHint(key)) !== null && _a !== void 0 ? _a : normalizeHeaderKey(key);
         if (!mapped) {
             const best = fuzzyHeaderMap(key);
-            if (best.score >= 0.75)
+            if (best.score >= 0.8)
                 mapped = best.key;
         }
         if (!mapped)
