@@ -337,22 +337,23 @@ export function sanitizeRow(input: CanonicalRowInput): { row: SanitizedRow; issu
   out.pieces_per_unit = collapseWS(String(input.pieces_per_unit ?? "")).trim() || undefined;
   out.unit = collapseWS(String(input.unit ?? "")).trim() || undefined;
 
-  if (input.cat !== undefined) {
+  const hasVal = (v: unknown) => String(v ?? "").trim() !== "";
+  if (input.cat !== undefined && hasVal(input.cat)) {
     const c = sanitizeCategoryCode(input.cat);
     if (c.value !== undefined) out.cat = c.value;
     issues.push(...c.issues);
   }
-  if (input.frm !== undefined) {
+  if (input.frm !== undefined && hasVal(input.frm)) {
     const fc = sanitizeFormCode(input.frm);
     if (fc.value !== undefined) out.frm = fc.value;
     issues.push(...fc.issues);
   }
-  if (input.pkg !== undefined) {
+  if (input.pkg !== undefined && hasVal(input.pkg)) {
     const pc = sanitizePackageCode(input.pkg);
     if (pc.value !== undefined) out.pkg = pc.value;
     issues.push(...pc.issues);
   }
-  if (input.coo !== undefined) {
+  if (input.coo !== undefined && hasVal(input.coo)) {
     const cc = sanitizeCountryCode(input.coo);
     if (cc.value !== undefined) out.coo = cc.value;
     issues.push(...cc.issues);
@@ -413,7 +414,7 @@ const mapIssueToParsed = (issue: Issue, rowIndex: number): ParsedRowError => {
       case "unit_price":
         return `batch.${issue.field}`;
       case "coo":
-        return "batch.coo";
+        return "identity.coo";
       case "cat":
       case "frm":
       case "pkg":
@@ -460,7 +461,9 @@ export function sanitizeCanonicalRow(
     errors.push({ row: rowIndex, field: "batch.expiry_date", code: "invalid_format", message: "Cannot parse expiry date" });
   }
 
-  const fatal = errors.some((e) => e.code.startsWith("E_") || e.code === "missing_required");
+  const fatal = errors.some((e) =>
+    (e.code.startsWith("E_") || e.code === "missing_required") && !e.field.startsWith("identity.")
+  );
   if (fatal) return { row: null, errors };
 
   const canonical: CanonicalProduct = {

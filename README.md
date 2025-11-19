@@ -71,5 +71,6 @@ async function handleImport() {
 - Added `.gitignore` for `node_modules`, lockfiles, debug logs, `.DS_Store`.
 - Updated `package.json` with `files` and `devDependencies.typescript`.
 - Made `tsconfig.json` standalone and strict.
+- Relaxed identity validation: only validate identity codes when provided, and treat identity errors as non-fatal; `coo` issues reported under `identity.coo`.
 
 Signed: EyosiyasJ

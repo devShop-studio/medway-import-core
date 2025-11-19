@@ -280,25 +280,26 @@ export function sanitizeRow(input) {
     out.purchase_unit = collapseWS(String((_h = input.purchase_unit) !== null && _h !== void 0 ? _h : "")).trim() || undefined;
     out.pieces_per_unit = collapseWS(String((_j = input.pieces_per_unit) !== null && _j !== void 0 ? _j : "")).trim() || undefined;
     out.unit = collapseWS(String((_k = input.unit) !== null && _k !== void 0 ? _k : "")).trim() || undefined;
-    if (input.cat !== undefined) {
+    const hasVal = (v) => String(v !== null && v !== void 0 ? v : "").trim() !== "";
+    if (input.cat !== undefined && hasVal(input.cat)) {
         const c = sanitizeCategoryCode(input.cat);
         if (c.value !== undefined)
             out.cat = c.value;
         issues.push(...c.issues);
     }
-    if (input.frm !== undefined) {
+    if (input.frm !== undefined && hasVal(input.frm)) {
         const fc = sanitizeFormCode(input.frm);
         if (fc.value !== undefined)
             out.frm = fc.value;
         issues.push(...fc.issues);
     }
-    if (input.pkg !== undefined) {
+    if (input.pkg !== undefined && hasVal(input.pkg)) {
         const pc = sanitizePackageCode(input.pkg);
         if (pc.value !== undefined)
             out.pkg = pc.value;
         issues.push(...pc.issues);
     }
-    if (input.coo !== undefined) {
+    if (input.coo !== undefined && hasVal(input.coo)) {
         const cc = sanitizeCountryCode(input.coo);
         if (cc.value !== undefined)
             out.coo = cc.value;
@@ -363,7 +364,7 @@ const mapIssueToParsed = (issue, rowIndex) => {
             case "unit_price":
                 return `batch.${issue.field}`;
             case "coo":
-                return "batch.coo";
+                return "identity.coo";
             case "cat":
             case "frm":
             case "pkg":
@@ -405,7 +406,7 @@ export function sanitizeCanonicalRow(raw, rowIndex) {
     else if (row.expiry_date) {
         errors.push({ row: rowIndex, field: "batch.expiry_date", code: "invalid_format", message: "Cannot parse expiry date" });
     }
-    const fatal = errors.some((e) => e.code.startsWith("E_") || e.code === "missing_required");
+    const fatal = errors.some((e) => (e.code.startsWith("E_") || e.code === "missing_required") && !e.field.startsWith("identity."));
     if (fatal)
         return { row: null, errors };
     const canonical = {
