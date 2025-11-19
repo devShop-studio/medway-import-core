@@ -1,12 +1,12 @@
-import { RawRow } from "./csv";
-import { detectSourceSchema, mapRawRowToCanonical } from "./schema";
-import { sanitizeCanonicalRow } from "./sanitize";
+import { RawRow } from "./csv.js";
+import { detectSourceSchema, mapRawRowToCanonical } from "./schema.js";
+import { sanitizeCanonicalRow } from "./sanitize.js";
 import {
   CanonicalProduct,
   ParsedImportResult,
   ParsedRowError,
   SourceSchema,
-} from "./types";
+} from "./types.js";
 
 interface ParseProductsCoreInput {
   rows: RawRow[];

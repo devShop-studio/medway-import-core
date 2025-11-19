@@ -1,9 +1,60 @@
-import { CanonicalProduct, ParsedRowError } from "./types";
+import type { CanonicalProduct, ParsedRowError } from "./types.js";
 
 // Shared, field-level sanitizers (moved from web importer).
 export type IssueLevel = "error" | "warn";
 export type Issue = { field: string; code: string; msg: string; level: IssueLevel };
-export type Row = Record<string, unknown>;
+
+export interface CanonicalRowInput {
+  generic_name?: unknown;
+  strength?: unknown;
+  form?: unknown;
+  brand_name?: unknown;
+  gtin?: unknown;
+  category?: unknown;
+  requires_prescription?: unknown;
+  is_controlled?: unknown;
+  storage_conditions?: unknown;
+  description?: unknown;
+  batch_no?: unknown;
+  expiry_date?: unknown;
+  on_hand?: unknown;
+  unit_price?: unknown;
+  reserved?: unknown;
+  purchase_unit?: unknown;
+  pieces_per_unit?: unknown;
+  unit?: unknown;
+  cat?: unknown;
+  frm?: unknown;
+  pkg?: unknown;
+  coo?: unknown;
+  sku?: unknown;
+}
+
+export interface SanitizedRow {
+  generic_name: string;
+  strength?: string;
+  form?: FormEnum;
+  brand_name?: string;
+  gtin?: string;
+  category?: string;
+  requires_prescription?: boolean;
+  is_controlled?: boolean;
+  storage_conditions?: string;
+  description?: string;
+  batch_no?: string;
+  expiry_date?: string;
+  on_hand?: number;
+  unit_price?: number;
+  reserved?: number;
+  purchase_unit?: string;
+  pieces_per_unit?: string;
+  unit?: string;
+  cat?: string;
+  frm?: string;
+  pkg?: string;
+  coo?: string;
+  sku?: string;
+}
 
 const FORM_ENUM = ["tablet", "capsule", "syrup", "injection", "cream", "ointment", "drops", "inhaler", "other"] as const;
 type FormEnum = (typeof FORM_ENUM)[number];
@@ -225,9 +276,9 @@ export function sanitizePackageCode(v: unknown): { value?: string; issues: Issue
   return { value: s, issues };
 }
 
-export function sanitizeRow(input: Row) {
+export function sanitizeRow(input: CanonicalRowInput): { row: SanitizedRow; issues: Issue[] } {
   const issues: Issue[] = [];
-  const out: Row = {};
+  const out: SanitizedRow = { generic_name: "" };
 
   const generic = collapseWS(String(input.generic_name ?? "")).trim();
   if (!generic) issues.push({ field: "generic_name", code: "E_GENERIC_MISSING", msg: "generic_name required", level: "error" });
@@ -307,6 +358,9 @@ export function sanitizeRow(input: Row) {
     issues.push(...cc.issues);
   }
 
+  const sku = collapseWS(String(input.sku ?? "")).trim();
+  if (sku) out.sku = sku;
+
   return { row: out, issues };
 }
 
@@ -376,7 +430,7 @@ export function sanitizeCanonicalRow(
   raw: Partial<CanonicalProduct>,
   rowIndex: number
 ): { row: CanonicalProduct | null; errors: ParsedRowError[] } {
-  const flat: Row = {
+  const flat: CanonicalRowInput = {
     generic_name: raw.product?.generic_name,
     strength: raw.product?.strength,
     form: raw.product?.form,
@@ -397,7 +451,7 @@ export function sanitizeCanonicalRow(
 
   if (!row) return { row: null, errors };
 
-  const expiryIso = parseDateFlexible(String(row.expiry_date ?? ""));
+  const expiryIso = parseDateFlexible(row.expiry_date);
   if (expiryIso) {
     if (!isFutureDate(expiryIso)) {
       errors.push({ row: rowIndex, field: "batch.expiry_date", code: "expired", message: "Expiry date must be in the future" });
@@ -411,28 +465,28 @@ export function sanitizeCanonicalRow(
 
   const canonical: CanonicalProduct = {
     product: {
-      generic_name: String(row.generic_name ?? ""),
-      strength: String(row.strength ?? ""),
-      form: String(row.form ?? ""),
-      category: (row.category as string | undefined) ?? null,
+      generic_name: row.generic_name ?? "",
+      strength: row.strength ?? "",
+      form: row.form ?? "",
+      category: row.category ?? null,
     },
     batch: {
-      batch_no: String(row.batch_no ?? ""),
+      batch_no: row.batch_no ?? "",
       expiry_date: expiryIso ?? "",
-      on_hand: (row.on_hand as number | undefined) ?? 0,
-      unit_price: (row.unit_price as number | undefined) ?? null,
-      coo: (row.coo as string | undefined) ?? null,
+      on_hand: row.on_hand ?? 0,
+      unit_price: row.unit_price ?? null,
+      coo: row.coo ?? null,
     },
   };
 
   const identityHasValues = Boolean(row.cat || row.frm || row.pkg || row.coo || row.sku);
   if (identityHasValues) {
     canonical.identity = {
-      cat: (row.cat as string | undefined) ?? null,
-      frm: (row.frm as string | undefined) ?? null,
-      pkg: (row.pkg as string | undefined) ?? null,
-      coo: (row.coo as string | undefined) ?? null,
-      sku: (row.sku as string | undefined) ?? null,
+      cat: row.cat ?? null,
+      frm: row.frm ?? null,
+      pkg: row.pkg ?? null,
+      coo: row.coo ?? null,
+      sku: row.sku ?? null,
     };
   }
 

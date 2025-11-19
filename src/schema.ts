@@ -1,5 +1,5 @@
-import { RawRow } from "./csv";
-import { CanonicalProduct, SourceSchema } from "./types";
+import { RawRow } from "./csv.js";
+import { CanonicalProduct, SourceSchema } from "./types.js";
 
 const TEMPLATE_V3_HEADERS = [
   "Generic (International Name)",
@@ -395,6 +395,13 @@ function mapTemplateV3Row(raw: RawRow): Partial<CanonicalProduct> {
 
 function mapCsvGenericRow(raw: RawRow): Partial<CanonicalProduct> {
   const flat: CanonicalFlat = {};
+  const assignField = <K extends keyof CanonicalFlat>(
+    key: K,
+    value: CanonicalFlat[K]
+  ) => {
+    flat[key] = value;
+  };
+
   for (const [key, value] of Object.entries(raw)) {
     const norm = normalizeHeaderKey(key);
     let mapped: keyof CanonicalFlat | undefined = norm;
@@ -407,13 +414,13 @@ function mapCsvGenericRow(raw: RawRow): Partial<CanonicalProduct> {
     switch (mapped) {
       case "on_hand":
       case "unit_price":
-        (flat as any)[mapped] = parseNumber(val);
+        assignField(mapped, parseNumber(val));
         break;
       case "form":
         flat.form = canonicalizeForm(sanitizeString(val));
         break;
       default:
-        (flat as any)[mapped] = sanitizeString(val);
+        assignField(mapped, sanitizeString(val));
     }
   }
   return ensureCanonical(flat);

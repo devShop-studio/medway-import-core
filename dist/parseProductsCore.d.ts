@@ -1,5 +1,5 @@
-import { RawRow } from "./csv";
-import { ParsedImportResult } from "./types";
+import { RawRow } from "./csv.js";
+import { ParsedImportResult } from "./types.js";
 interface ParseProductsCoreInput {
     rows: RawRow[];
     filename: string;

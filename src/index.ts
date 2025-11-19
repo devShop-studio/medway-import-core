@@ -1,12 +1,16 @@
-import { parseProductsCore } from "./parseProductsCore";
-import { parseCsvToRows } from "./csv";
-import { readXlsxToRows } from "./xlsx";
-import type { ParsedImportResult } from "./types";
+import { parseProductsCore } from "./parseProductsCore.js";
+import { parseCsvToRows } from "./csv.js";
+import { readXlsxToRows } from "./xlsx.js";
+import type { ParsedImportResult } from "./types.js";
 
-export * from "./types";
-export * from "./sanitize";
+export * from "./types.js";
+export * from "./sanitize.js";
 export { parseProductsCore };
 
+/**
+ * Parse a products file (XLSX or CSV) from bytes and produce canonical rows with errors and meta.
+ * Accepts ArrayBuffer input to work in web and React Native environments.
+ */
 export async function parseProductsFileFromBuffer(
   fileBytes: ArrayBuffer,
   filename: string

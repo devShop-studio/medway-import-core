@@ -333,6 +333,9 @@ function mapTemplateV3Row(raw) {
 }
 function mapCsvGenericRow(raw) {
     const flat = {};
+    const assignField = (key, value) => {
+        flat[key] = value;
+    };
     for (const [key, value] of Object.entries(raw)) {
         const norm = normalizeHeaderKey(key);
         let mapped = norm;
@@ -347,13 +350,13 @@ function mapCsvGenericRow(raw) {
         switch (mapped) {
             case "on_hand":
             case "unit_price":
-                flat[mapped] = parseNumber(val);
+                assignField(mapped, parseNumber(val));
                 break;
             case "form":
                 flat.form = canonicalizeForm(sanitizeString(val));
                 break;
             default:
-                flat[mapped] = sanitizeString(val);
+                assignField(mapped, sanitizeString(val));
         }
     }
     return ensureCanonical(flat);

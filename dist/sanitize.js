@@ -224,9 +224,9 @@ export function sanitizePackageCode(v) {
     return { value: s, issues };
 }
 export function sanitizeRow(input) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
     const issues = [];
-    const out = {};
+    const out = { generic_name: "" };
     const generic = collapseWS(String((_a = input.generic_name) !== null && _a !== void 0 ? _a : "")).trim();
     if (!generic)
         issues.push({ field: "generic_name", code: "E_GENERIC_MISSING", msg: "generic_name required", level: "error" });
@@ -304,6 +304,9 @@ export function sanitizeRow(input) {
             out.coo = cc.value;
         issues.push(...cc.issues);
     }
+    const sku = collapseWS(String((_l = input.sku) !== null && _l !== void 0 ? _l : "")).trim();
+    if (sku)
+        out.sku = sku;
     return { row: out, issues };
 }
 const ddmmyyyyToIso = (s) => {
@@ -373,7 +376,7 @@ const mapIssueToParsed = (issue, rowIndex) => {
     return { row: rowIndex, field: fieldPath, code: issue.code, message: issue.msg };
 };
 export function sanitizeCanonicalRow(raw, rowIndex) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4;
     const flat = {
         generic_name: (_a = raw.product) === null || _a === void 0 ? void 0 : _a.generic_name,
         strength: (_b = raw.product) === null || _b === void 0 ? void 0 : _b.strength,
@@ -393,7 +396,7 @@ export function sanitizeCanonicalRow(raw, rowIndex) {
     const errors = issues.map((i) => mapIssueToParsed(i, rowIndex));
     if (!row)
         return { row: null, errors };
-    const expiryIso = parseDateFlexible(String((_s = row.expiry_date) !== null && _s !== void 0 ? _s : ""));
+    const expiryIso = parseDateFlexible(row.expiry_date);
     if (expiryIso) {
         if (!isFutureDate(expiryIso)) {
             errors.push({ row: rowIndex, field: "batch.expiry_date", code: "expired", message: "Expiry date must be in the future" });
@@ -407,27 +410,27 @@ export function sanitizeCanonicalRow(raw, rowIndex) {
         return { row: null, errors };
     const canonical = {
         product: {
-            generic_name: String((_t = row.generic_name) !== null && _t !== void 0 ? _t : ""),
-            strength: String((_u = row.strength) !== null && _u !== void 0 ? _u : ""),
-            form: String((_v = row.form) !== null && _v !== void 0 ? _v : ""),
-            category: (_w = row.category) !== null && _w !== void 0 ? _w : null,
+            generic_name: (_s = row.generic_name) !== null && _s !== void 0 ? _s : "",
+            strength: (_t = row.strength) !== null && _t !== void 0 ? _t : "",
+            form: (_u = row.form) !== null && _u !== void 0 ? _u : "",
+            category: (_v = row.category) !== null && _v !== void 0 ? _v : null,
         },
         batch: {
-            batch_no: String((_x = row.batch_no) !== null && _x !== void 0 ? _x : ""),
+            batch_no: (_w = row.batch_no) !== null && _w !== void 0 ? _w : "",
             expiry_date: expiryIso !== null && expiryIso !== void 0 ? expiryIso : "",
-            on_hand: (_y = row.on_hand) !== null && _y !== void 0 ? _y : 0,
-            unit_price: (_z = row.unit_price) !== null && _z !== void 0 ? _z : null,
-            coo: (_0 = row.coo) !== null && _0 !== void 0 ? _0 : null,
+            on_hand: (_x = row.on_hand) !== null && _x !== void 0 ? _x : 0,
+            unit_price: (_y = row.unit_price) !== null && _y !== void 0 ? _y : null,
+            coo: (_z = row.coo) !== null && _z !== void 0 ? _z : null,
         },
     };
     const identityHasValues = Boolean(row.cat || row.frm || row.pkg || row.coo || row.sku);
     if (identityHasValues) {
         canonical.identity = {
-            cat: (_1 = row.cat) !== null && _1 !== void 0 ? _1 : null,
-            frm: (_2 = row.frm) !== null && _2 !== void 0 ? _2 : null,
-            pkg: (_3 = row.pkg) !== null && _3 !== void 0 ? _3 : null,
-            coo: (_4 = row.coo) !== null && _4 !== void 0 ? _4 : null,
-            sku: (_5 = row.sku) !== null && _5 !== void 0 ? _5 : null,
+            cat: (_0 = row.cat) !== null && _0 !== void 0 ? _0 : null,
+            frm: (_1 = row.frm) !== null && _1 !== void 0 ? _1 : null,
+            pkg: (_2 = row.pkg) !== null && _2 !== void 0 ? _2 : null,
+            coo: (_3 = row.coo) !== null && _3 !== void 0 ? _3 : null,
+            sku: (_4 = row.sku) !== null && _4 !== void 0 ? _4 : null,
         };
     }
     return { row: canonical, errors };

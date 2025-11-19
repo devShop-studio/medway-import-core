@@ -1,5 +1,5 @@
-import { RawRow } from "./csv";
-import { CanonicalProduct, SourceSchema } from "./types";
+import { RawRow } from "./csv.js";
+import { CanonicalProduct, SourceSchema } from "./types.js";
 export declare function detectSourceSchema(rows: RawRow[], headerMeta?: {
     templateVersion?: string;
     headerChecksum?: string;

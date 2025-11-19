@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import type { RawRow } from "./csv";
+import type { RawRow } from "./csv.js";
 
 export async function readXlsxToRows(
   fileBytes: ArrayBuffer

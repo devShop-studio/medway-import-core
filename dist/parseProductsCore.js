@@ -1,5 +1,5 @@
-import { detectSourceSchema, mapRawRowToCanonical } from "./schema";
-import { sanitizeCanonicalRow } from "./sanitize";
+import { detectSourceSchema, mapRawRowToCanonical } from "./schema.js";
+import { sanitizeCanonicalRow } from "./sanitize.js";
 export function parseProductsCore(input) {
     const { rows, headerMeta } = input;
     const sourceSchema = detectSourceSchema(rows, headerMeta);
