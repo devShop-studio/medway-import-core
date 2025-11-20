@@ -1,4 +1,6 @@
-const FORM_ENUM = ["tablet", "capsule", "syrup", "injection", "cream", "ointment", "drops", "inhaler", "other"];
+import { classifyUmbrellaCategory, mapCategoryCodeToUmbrella } from "./category.js";
+import { normalizeCountryToIso2 } from "./country.js";
+const FORM_ENUM = ["tablet", "capsule", "syrup", "injection", "cream", "ointment", "drops", "inhaler", "suspension", "solution", "gel", "spray", "lotion", "patch", "powder", "other"];
 const FORM_SYNONYMS = {
     tab: "tablet",
     tablet: "tablet",
@@ -27,6 +29,13 @@ const FORM_SYNONYMS = {
     drops: "drops",
     inh: "inhaler",
     inhaler: "inhaler",
+    suspension: "suspension",
+    solution: "solution",
+    gel: "gel",
+    spray: "spray",
+    lotion: "lotion",
+    patch: "patch",
+    powder: "powder",
     suppository: "other",
     suppositories: "other",
     "topical medicines": "other",
@@ -39,6 +48,8 @@ const asciiLower = (s) => String(s !== null && s !== void 0 ? s : "")
     .trim();
 const collapseWS = (s) => s.replace(/\s+/g, " ").trim();
 const onlyDigits = (s) => s.replace(/\D+/g, "");
+const hasDigit = (s) => /\d/.test(String(s !== null && s !== void 0 ? s : ""));
+const hasUnitToken = (s) => /(mg|mcg|g|ml|iu|%)/i.test(String(s !== null && s !== void 0 ? s : ""));
 const lev = (a, b) => {
     const m = a.length, n = b.length, d = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
     for (let i = 0; i <= m; i++)
@@ -52,12 +63,20 @@ const lev = (a, b) => {
         }
     return d[m][n];
 };
+/**
+ * Normalize free-text dosage form to canonical enum with fuzzy match and hygiene checks.
+ * Enforces no-digits rule (warn) and autocorrects close variants; errors on unknowns.
+ * Signed: EyosiyasJ
+ */
 export function sanitizeForm(v) {
     var _a;
     const issues = [];
     const raw = asciiLower(v);
     if (!raw)
         return { issues: [{ field: "form", code: "E_FORM_MISSING", msg: "form required", level: "error" }] };
+    if (hasDigit(raw) || hasUnitToken(raw)) {
+        issues.push({ field: "form", code: "E_TEXT_DIGITS_SUSPECT", msg: "form must not contain digits/units", level: "warn" });
+    }
     if (FORM_SYNONYMS[raw])
         return { value: FORM_SYNONYMS[raw], issues };
     const candidates = [...Object.keys(FORM_SYNONYMS), ...FORM_ENUM];
@@ -71,11 +90,11 @@ export function sanitizeForm(v) {
     if (best && best.dist <= 2) {
         return {
             value: best.mapped,
-            issues: [{ field: "form", code: "W_FORM_AUTOCORRECT", msg: `autocorrected "${v}"→"${best.mapped}"`, level: "warn" }],
+            issues: [{ field: "form", code: "W_FORM_AUTOCORRECT", msg: `autocorrected "${v}"→"${best.mapped}"`, level: "warn" }, ...issues],
             suggestion: best.mapped,
         };
     }
-    return { issues: [{ field: "form", code: "E_FORM_INVALID", msg: `invalid form "${v}"`, level: "error" }] };
+    return { issues: [...issues, { field: "form", code: "E_FORM_INVALID", msg: `invalid form "${v}"`, level: "error" }] };
 }
 export function sanitizeStrength(v) {
     const issues = [];
@@ -112,9 +131,9 @@ export function sanitizeBool(v) {
     const s = asciiLower(v);
     if (!s)
         return { issues: [] };
-    if (["true", "yes", "1", "y"].includes(s))
+    if (["true", "yes", "1", "y", "rx"].includes(s))
         return { value: true, issues: [] };
-    if (["false", "no", "0", "n"].includes(s))
+    if (["false", "no", "0", "n", "otc"].includes(s))
         return { value: false, issues: [] };
     return { issues: [{ field: "boolean", code: "E_BOOL", msg: `not a boolean: "${v}"`, level: "error" }] };
 }
@@ -123,6 +142,9 @@ export function sanitizeBatchNo(v) {
     if (!v)
         return { issues };
     let s = String(v).toUpperCase();
+    const labeled = s.match(/\bB[0-9A-Z]{3,}\b/);
+    if (labeled)
+        s = labeled[0];
     s = s.replace(/[^A-Z0-9./-]/g, "");
     s = s.replace(/\.{2,}/g, ".");
     s = s.replace(/-{2,}/g, "-");
@@ -224,7 +246,7 @@ export function sanitizePackageCode(v) {
     return { value: s, issues };
 }
 export function sanitizeRow(input) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
     const issues = [];
     const out = { generic_name: "" };
     const generic = collapseWS(String((_a = input.generic_name) !== null && _a !== void 0 ? _a : "")).trim();
@@ -236,6 +258,11 @@ export function sanitizeRow(input) {
         out.form = f.value;
     issues.push(...f.issues);
     out.brand_name = collapseWS(String((_b = input.brand_name) !== null && _b !== void 0 ? _b : "")).trim() || undefined;
+    out.manufacturer_name = collapseWS(String((_c = input.manufacturer_name) !== null && _c !== void 0 ? _c : "")).trim() || undefined;
+    // No-digits rule: text-only fields should not contain digits or unit tokens
+    if (out.manufacturer_name && (hasDigit(out.manufacturer_name) || hasUnitToken(out.manufacturer_name))) {
+        issues.push({ field: "manufacturer_name", code: "E_TEXT_DIGITS_SUSPECT", msg: "manufacturer must not contain digits/units", level: "warn" });
+    }
     const st = sanitizeStrength(input.strength);
     if (st.value !== undefined)
         out.strength = st.value;
@@ -244,7 +271,10 @@ export function sanitizeRow(input) {
     if (gt.value !== undefined)
         out.gtin = gt.value;
     issues.push(...gt.issues);
-    out.category = collapseWS(String((_c = input.category) !== null && _c !== void 0 ? _c : "")).trim() || undefined;
+    out.category = collapseWS(String((_d = input.category) !== null && _d !== void 0 ? _d : "")).trim() || undefined;
+    if (out.category && (hasDigit(out.category) || hasUnitToken(out.category))) {
+        issues.push({ field: "category", code: "E_TEXT_DIGITS_SUSPECT", msg: "category must not contain digits/units", level: "warn" });
+    }
     const rp = sanitizeBool(input.requires_prescription);
     if (rp.value !== undefined)
         out.requires_prescription = rp.value;
@@ -253,33 +283,22 @@ export function sanitizeRow(input) {
     if (ic.value !== undefined)
         out.is_controlled = ic.value;
     issues.push(...ic.issues);
-    out.storage_conditions = collapseWS(String((_d = input.storage_conditions) !== null && _d !== void 0 ? _d : "")).trim() || undefined;
-    out.description = collapseWS(String((_e = input.description) !== null && _e !== void 0 ? _e : "")).trim() || undefined;
-    const hasStock = !!(input.batch_no || input.expiry_date || input.on_hand || input.unit_price || input.reserved);
+    out.storage_conditions = collapseWS(String((_e = input.storage_conditions) !== null && _e !== void 0 ? _e : "")).trim() || undefined;
+    out.description = collapseWS(String((_f = input.description) !== null && _f !== void 0 ? _f : "")).trim() || undefined;
     const bn = sanitizeBatchNo(input.batch_no);
-    const ex = sanitizeExpiry(input.expiry_date);
+    const expiryIsoFlex = parseDateFlexible(input.expiry_date);
     const q = sanitizeNumber(input.on_hand, { ge: 0 });
     const pr = sanitizeNumber(input.unit_price, { gt: 0 });
-    const rv = sanitizeNumber((_f = input.reserved) !== null && _f !== void 0 ? _f : 0, { ge: 0 });
-    if (hasStock) {
-        if (!bn.value)
-            issues.push({ field: "batch_no", code: "E_STOCK_BATCH_REQUIRED", msg: "batch_no required when stock present", level: "error" });
-        if (!ex.value)
-            issues.push({ field: "expiry_date", code: "E_STOCK_EXPIRY_REQUIRED", msg: "expiry_date required when stock present", level: "error" });
-        if (q.value === undefined)
-            issues.push({ field: "on_hand", code: "E_STOCK_QTY_REQUIRED", msg: "on_hand required when stock present", level: "error" });
-        if (pr.value === undefined)
-            issues.push({ field: "unit_price", code: "E_STOCK_PRICE_REQUIRED", msg: "unit_price required when stock present", level: "error" });
-    }
-    issues.push(...bn.issues, ...ex.issues, ...q.issues, ...pr.issues, ...rv.issues);
+    const rv = sanitizeNumber((_g = input.reserved) !== null && _g !== void 0 ? _g : 0, { ge: 0 });
+    issues.push(...bn.issues, ...q.issues, ...pr.issues, ...rv.issues);
     out.batch_no = bn.value;
-    out.expiry_date = ex.value;
+    out.expiry_date = expiryIsoFlex !== null && expiryIsoFlex !== void 0 ? expiryIsoFlex : (collapseWS(String((_h = input.expiry_date) !== null && _h !== void 0 ? _h : "")).trim() || undefined);
     out.on_hand = q.value;
     out.unit_price = pr.value;
-    out.reserved = (_g = rv.value) !== null && _g !== void 0 ? _g : 0;
-    out.purchase_unit = collapseWS(String((_h = input.purchase_unit) !== null && _h !== void 0 ? _h : "")).trim() || undefined;
-    out.pieces_per_unit = collapseWS(String((_j = input.pieces_per_unit) !== null && _j !== void 0 ? _j : "")).trim() || undefined;
-    out.unit = collapseWS(String((_k = input.unit) !== null && _k !== void 0 ? _k : "")).trim() || undefined;
+    out.reserved = (_j = rv.value) !== null && _j !== void 0 ? _j : 0;
+    out.purchase_unit = collapseWS(String((_k = input.purchase_unit) !== null && _k !== void 0 ? _k : "")).trim() || undefined;
+    out.pieces_per_unit = collapseWS(String((_l = input.pieces_per_unit) !== null && _l !== void 0 ? _l : "")).trim() || undefined;
+    out.unit = collapseWS(String((_m = input.unit) !== null && _m !== void 0 ? _m : "")).trim() || undefined;
     const hasVal = (v) => String(v !== null && v !== void 0 ? v : "").trim() !== "";
     if (input.cat !== undefined && hasVal(input.cat)) {
         const c = sanitizeCategoryCode(input.cat);
@@ -299,13 +318,19 @@ export function sanitizeRow(input) {
             out.pkg = pc.value;
         issues.push(...pc.issues);
     }
+    // Country normalization via ISO dataset with alias+fuzzy layer
     if (input.coo !== undefined && hasVal(input.coo)) {
-        const cc = sanitizeCountryCode(input.coo);
+        const cooRaw = collapseWS(String((_o = input.coo) !== null && _o !== void 0 ? _o : "")).trim();
+        if (cooRaw && hasDigit(cooRaw)) {
+            issues.push({ field: "coo", code: "E_TEXT_DIGITS_SUSPECT", msg: "country must not contain digits", level: "warn" });
+        }
+        const iso2 = normalizeCountryToIso2(String(input.coo)) || String(input.coo);
+        const cc = sanitizeCountryCode(iso2);
         if (cc.value !== undefined)
             out.coo = cc.value;
         issues.push(...cc.issues);
     }
-    const sku = collapseWS(String((_l = input.sku) !== null && _l !== void 0 ? _l : "")).trim();
+    const sku = collapseWS(String((_p = input.sku) !== null && _p !== void 0 ? _p : "")).trim();
     if (sku)
         out.sku = sku;
     return { row: out, issues };
@@ -319,7 +344,18 @@ const ddmmyyyyToIso = (s) => {
     const [_, dd, mm, yyyy] = m;
     return `${yyyy}-${mm}-${dd}`;
 };
+/**
+ * Parse common expiry formats into deterministic ISO date (YYYY-MM-DD).
+ * Supports:
+ * - ISO `YYYY-MM-DD` pass-through
+ * - `DD/MM/YYYY` → ISO
+ * - Excel serial (>=60) → ISO
+ * - `MMM-YY`, `MMM/YY`, `MMM YYYY` (e.g., `Nov-28`, `Feb/2028`) → last day of month
+ * - `MM-YY`, `MM/YY`, `MM YYYY` (e.g., `11-28`, `07/2030`) → last day of month
+ * Signed: EyosiyasJ
+ */
 const parseDateFlexible = (value) => {
+    var _a;
     if (value === undefined || value === null || value === "")
         return undefined;
     const s = String(value).trim();
@@ -330,6 +366,7 @@ const parseDateFlexible = (value) => {
     const iso = ddmmyyyyToIso(s);
     if (iso)
         return iso;
+    // Excel serial dates
     if (/^\d{3,5}$/.test(s)) {
         const serial = Number(s);
         if (Number.isFinite(serial) && serial > 59 && serial < 400000) {
@@ -339,6 +376,36 @@ const parseDateFlexible = (value) => {
             if (!isNaN(dt.getTime()))
                 return dt.toISOString().slice(0, 10);
         }
+    }
+    // Month tokens
+    const MONTHS = {
+        jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+        jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
+    };
+    const norm = s.toLowerCase().replace(/[,]/g, "").replace(/\s+/g, " ").trim();
+    const parts = norm.split(/[-/ ]+/).filter(Boolean);
+    const lastDayOfMonth = (y, m1to12) => {
+        const mm = String(m1to12).padStart(2, "0");
+        const end = new Date(y, m1to12, 0).getDate();
+        const dd = String(end).padStart(2, "0");
+        return `${y}-${mm}-${dd}`;
+    };
+    // Named month patterns: MMM-YY or MMM YYYY
+    if (parts.length === 2 && /[a-z]/.test(parts[0])) {
+        const m = (_a = MONTHS[parts[0].slice(0, 4)]) !== null && _a !== void 0 ? _a : MONTHS[parts[0]];
+        if (m) {
+            const yy = parts[1];
+            const year = /^\d{2}$/.test(yy) ? 2000 + Number(yy) : Number(yy);
+            if (year >= 1900 && year <= 2100)
+                return lastDayOfMonth(year, m);
+        }
+    }
+    // Numeric month patterns: MM-YY or MM YYYY
+    if (parts.length === 2 && /^\d{1,2}$/.test(parts[0]) && /^\d{2,4}$/.test(parts[1])) {
+        const m = Number(parts[0]);
+        const year = /^\d{2}$/.test(parts[1]) ? 2000 + Number(parts[1]) : Number(parts[1]);
+        if (m >= 1 && m <= 12 && year >= 1900 && year <= 2100)
+            return lastDayOfMonth(year, m);
     }
     return undefined;
 };
@@ -376,67 +443,175 @@ const mapIssueToParsed = (issue, rowIndex) => {
     })();
     return { row: rowIndex, field: fieldPath, code: issue.code, message: issue.msg };
 };
-export function sanitizeCanonicalRow(raw, rowIndex) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5, _6;
+/**
+ * Sanitize and validate a canonical row with schema-aware rules and mode controls.
+ *
+ * Parameters:
+ * - `raw`: partial `CanonicalProduct` prior to strict normalization.
+ * - `rowIndex`: 1-based Excel/CSV row index for error reporting.
+ * - `schema`: `SourceSchema` used to adjust requiredness (best-effort for `concat_items`).
+ * - `validationMode`: `full` | `errorsOnly` | `none` to control error verbosity/perf.
+ *
+ * Behavior:
+ * - Builds `pkg.pieces_per_unit` from `pieces_per_unit` and retains `identity` codes.
+ * - For `concat_items` with no dose signal (no strength), only `generic_name` is required.
+ * - Suppresses category digit/units warnings under `concat_items` (POS IDs common).
+ * - Filters warnings in `errorsOnly`; suppresses all errors in `none`.
+ *
+ * Returns:
+ * - `{ row, errors }` where `row` is `CanonicalProduct | null` if unrecoverable,
+ *   and `errors` are `ParsedRowError[]` respecting `validationMode`.
+ * Signed: EyosiyasJ
+ */
+export function sanitizeCanonicalRow(raw, rowIndex, schema, validationMode = "full") {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, _17, _18, _19, _20, _21, _22, _23;
     const flat = {
         generic_name: (_a = raw.product) === null || _a === void 0 ? void 0 : _a.generic_name,
-        strength: (_b = raw.product) === null || _b === void 0 ? void 0 : _b.strength,
-        form: (_c = raw.product) === null || _c === void 0 ? void 0 : _c.form,
-        category: (_e = (_d = raw.product) === null || _d === void 0 ? void 0 : _d.category) !== null && _e !== void 0 ? _e : undefined,
-        batch_no: (_f = raw.batch) === null || _f === void 0 ? void 0 : _f.batch_no,
-        expiry_date: (_g = raw.batch) === null || _g === void 0 ? void 0 : _g.expiry_date,
-        on_hand: (_h = raw.batch) === null || _h === void 0 ? void 0 : _h.on_hand,
-        unit_price: (_j = raw.batch) === null || _j === void 0 ? void 0 : _j.unit_price,
-        cat: (_k = raw.identity) === null || _k === void 0 ? void 0 : _k.cat,
-        frm: (_l = raw.identity) === null || _l === void 0 ? void 0 : _l.frm,
-        pkg: (_m = raw.identity) === null || _m === void 0 ? void 0 : _m.pkg,
-        coo: (_p = (_o = raw.batch) === null || _o === void 0 ? void 0 : _o.coo) !== null && _p !== void 0 ? _p : (_q = raw.identity) === null || _q === void 0 ? void 0 : _q.coo,
-        sku: (_r = raw.identity) === null || _r === void 0 ? void 0 : _r.sku,
+        brand_name: (_b = raw.product) === null || _b === void 0 ? void 0 : _b.brand_name,
+        strength: (_c = raw.product) === null || _c === void 0 ? void 0 : _c.strength,
+        form: (_d = raw.product) === null || _d === void 0 ? void 0 : _d.form,
+        category: (_f = (_e = raw.product) === null || _e === void 0 ? void 0 : _e.category) !== null && _f !== void 0 ? _f : undefined,
+        requires_prescription: (_g = raw.product) === null || _g === void 0 ? void 0 : _g.requires_prescription,
+        is_controlled: (_h = raw.product) === null || _h === void 0 ? void 0 : _h.is_controlled,
+        storage_conditions: (_j = raw.product) === null || _j === void 0 ? void 0 : _j.storage_conditions,
+        description: (_k = raw.product) === null || _k === void 0 ? void 0 : _k.description,
+        batch_no: (_l = raw.batch) === null || _l === void 0 ? void 0 : _l.batch_no,
+        expiry_date: (_m = raw.batch) === null || _m === void 0 ? void 0 : _m.expiry_date,
+        on_hand: (_o = raw.batch) === null || _o === void 0 ? void 0 : _o.on_hand,
+        unit_price: (_p = raw.batch) === null || _p === void 0 ? void 0 : _p.unit_price,
+        cat: (_q = raw.identity) === null || _q === void 0 ? void 0 : _q.cat,
+        frm: (_r = raw.identity) === null || _r === void 0 ? void 0 : _r.frm,
+        pkg: (_s = raw.identity) === null || _s === void 0 ? void 0 : _s.pkg,
+        coo: (_u = (_t = raw.batch) === null || _t === void 0 ? void 0 : _t.coo) !== null && _u !== void 0 ? _u : (_v = raw.identity) === null || _v === void 0 ? void 0 : _v.coo,
+        sku: (_w = raw.identity) === null || _w === void 0 ? void 0 : _w.sku,
+        purchase_unit: (_x = raw.identity) === null || _x === void 0 ? void 0 : _x.purchase_unit,
+        pieces_per_unit: (_y = raw.pkg) === null || _y === void 0 ? void 0 : _y.pieces_per_unit,
+        unit: (_z = raw.identity) === null || _z === void 0 ? void 0 : _z.unit,
     };
     const { row, issues } = sanitizeRow(flat);
-    const errors = issues.map((i) => mapIssueToParsed(i, rowIndex));
+    const filteredIssues = (() => {
+        if (schema === "concat_items") {
+            return issues.filter((i) => !(i.field === "category" && i.code === "E_TEXT_DIGITS_SUSPECT"));
+        }
+        return issues;
+    })();
+    const baseIssues = validationMode === "errorsOnly" ? filteredIssues.filter((i) => i.level === "error") : filteredIssues;
+    const errors = validationMode === "none" ? [] : baseIssues.map((i) => mapIssueToParsed(i, rowIndex));
     if (!row)
         return { row: null, errors };
     const hasGeneric = Boolean(row.generic_name && row.generic_name.trim());
     const hasBrand = Boolean(row.brand_name && String(row.brand_name).trim());
-    if (!hasGeneric && !hasBrand) {
-        return { row: null, errors };
+    if (validationMode !== "none" && !hasGeneric && !hasBrand) {
+        errors.push({ row: rowIndex, field: "product.generic_name", code: "E_PRODUCT_NAME_REQUIRED", message: "Product name required" });
     }
-    const expiryIso = parseDateFlexible(row.expiry_date);
-    if (expiryIso) {
-        if (!isFutureDate(expiryIso)) {
-            errors.push({ row: rowIndex, field: "batch.expiry_date", code: "expired", message: "Expiry date must be in the future" });
+    const emptyish = (v) => {
+        const s = String(v !== null && v !== void 0 ? v : "").trim().toLowerCase();
+        return !s || s === "n/a" || s === "na" || s === "-" || s === "none" || s === "null";
+    };
+    const doseSignalPresent = Boolean(row.strength && String(row.strength).trim());
+    const relaxed = schema === "concat_items" && !doseSignalPresent;
+    if (validationMode !== "none" && emptyish(row.generic_name)) {
+        errors.push({ row: rowIndex, field: "product.generic_name", code: "E_REQUIRED_GENERIC_NAME", message: "generic_name required" });
+    }
+    if (validationMode !== "none" && !relaxed) {
+        if (emptyish(row.strength)) {
+            errors.push({ row: rowIndex, field: "product.strength", code: "E_REQUIRED_STRENGTH", message: "strength required" });
+        }
+        if (emptyish(row.form)) {
+            errors.push({ row: rowIndex, field: "product.form", code: "E_REQUIRED_FORM", message: "form required" });
+        }
+        if (emptyish(row.category)) {
+            errors.push({ row: rowIndex, field: "product.category", code: "E_REQUIRED_CATEGORY", message: "category required" });
         }
     }
-    else if (row.expiry_date) {
-        errors.push({ row: rowIndex, field: "batch.expiry_date", code: "invalid_format", message: "Cannot parse expiry date" });
+    const expiryIso = parseDateFlexible(row.expiry_date);
+    if (validationMode !== "none" && !relaxed) {
+        if (emptyish(row.expiry_date)) {
+            errors.push({ row: rowIndex, field: "batch.expiry_date", code: "E_REQUIRED_EXPIRY", message: "expiry_date required" });
+        }
+    }
+    if (validationMode !== "none") {
+        if (expiryIso) {
+            if (!isFutureDate(expiryIso)) {
+                errors.push({ row: rowIndex, field: "batch.expiry_date", code: "expired", message: "Expiry date must be in the future" });
+            }
+        }
+        else if (row.expiry_date) {
+            errors.push({ row: rowIndex, field: "batch.expiry_date", code: "invalid_format", message: "Cannot parse expiry date" });
+        }
+    }
+    const hasPack = Boolean(row.pkg) || (typeof row.pieces_per_unit === "number" && !Number.isNaN(row.pieces_per_unit)) || (typeof row.pieces_per_unit === "string" && !emptyish(row.pieces_per_unit));
+    if (validationMode !== "none" && !relaxed) {
+        if (!hasPack) {
+            errors.push({ row: rowIndex, field: "pkg.pieces_per_unit", code: "E_REQUIRED_PACK_CONTENTS", message: "pack contents required" });
+        }
+        if (emptyish(row.coo)) {
+            errors.push({ row: rowIndex, field: "identity.coo", code: "E_REQUIRED_COO", message: "country of origin required" });
+        }
+        if (row.on_hand === undefined || row.on_hand === null || Number.isNaN(Number(row.on_hand))) {
+            errors.push({ row: rowIndex, field: "batch.on_hand", code: "E_REQUIRED_QUANTITY", message: "quantity required" });
+        }
     }
     // Do not hard-drop on stock/identity errors; apps decide readiness.
     const canonical = {
         product: {
-            generic_name: (_s = row.generic_name) !== null && _s !== void 0 ? _s : "",
-            brand_name: (_u = ((_t = row.brand_name) !== null && _t !== void 0 ? _t : null)) !== null && _u !== void 0 ? _u : null,
-            strength: (_v = row.strength) !== null && _v !== void 0 ? _v : "",
-            form: (_w = row.form) !== null && _w !== void 0 ? _w : "",
-            category: (_x = row.category) !== null && _x !== void 0 ? _x : null,
+            generic_name: (_0 = row.generic_name) !== null && _0 !== void 0 ? _0 : "",
+            brand_name: (_2 = ((_1 = row.brand_name) !== null && _1 !== void 0 ? _1 : null)) !== null && _2 !== void 0 ? _2 : null,
+            manufacturer_name: (_4 = ((_3 = row.manufacturer_name) !== null && _3 !== void 0 ? _3 : null)) !== null && _4 !== void 0 ? _4 : null,
+            strength: (_5 = row.strength) !== null && _5 !== void 0 ? _5 : "",
+            form: (_6 = row.form) !== null && _6 !== void 0 ? _6 : "",
+            category: (_7 = row.category) !== null && _7 !== void 0 ? _7 : null,
+            requires_prescription: typeof row.requires_prescription === "boolean" ? row.requires_prescription : null,
+            is_controlled: typeof row.is_controlled === "boolean" ? row.is_controlled : null,
+            storage_conditions: (_8 = row.storage_conditions) !== null && _8 !== void 0 ? _8 : null,
+            description: (_9 = row.description) !== null && _9 !== void 0 ? _9 : null,
         },
         batch: {
-            batch_no: (_y = row.batch_no) !== null && _y !== void 0 ? _y : "",
+            batch_no: (_10 = row.batch_no) !== null && _10 !== void 0 ? _10 : "",
             expiry_date: expiryIso !== null && expiryIso !== void 0 ? expiryIso : "",
-            on_hand: (_z = row.on_hand) !== null && _z !== void 0 ? _z : 0,
-            unit_price: (_0 = row.unit_price) !== null && _0 !== void 0 ? _0 : null,
-            coo: (_1 = row.coo) !== null && _1 !== void 0 ? _1 : null,
+            on_hand: (_11 = row.on_hand) !== null && _11 !== void 0 ? _11 : 0,
+            unit_price: (_12 = row.unit_price) !== null && _12 !== void 0 ? _12 : null,
+            coo: (_13 = row.coo) !== null && _13 !== void 0 ? _13 : null,
         },
     };
     const identityHasValues = Boolean(row.cat || row.frm || row.pkg || row.coo || row.sku);
     if (identityHasValues) {
         canonical.identity = {
-            cat: (_2 = row.cat) !== null && _2 !== void 0 ? _2 : null,
-            frm: (_3 = row.frm) !== null && _3 !== void 0 ? _3 : null,
-            pkg: (_4 = row.pkg) !== null && _4 !== void 0 ? _4 : null,
-            coo: (_5 = row.coo) !== null && _5 !== void 0 ? _5 : null,
-            sku: (_6 = row.sku) !== null && _6 !== void 0 ? _6 : null,
+            cat: (_14 = row.cat) !== null && _14 !== void 0 ? _14 : null,
+            frm: (_15 = row.frm) !== null && _15 !== void 0 ? _15 : null,
+            pkg: (_16 = row.pkg) !== null && _16 !== void 0 ? _16 : null,
+            coo: (_17 = row.coo) !== null && _17 !== void 0 ? _17 : null,
+            sku: (_18 = row.sku) !== null && _18 !== void 0 ? _18 : null,
+            purchase_unit: (_19 = row.purchase_unit) !== null && _19 !== void 0 ? _19 : null,
+            unit: (_20 = row.unit) !== null && _20 !== void 0 ? _20 : null,
         };
+    }
+    // Build packaging namespace for pack contents
+    const parsedPiecesPerUnit = (() => {
+        const v = row.pieces_per_unit;
+        if (typeof v === "number")
+            return Number.isFinite(v) ? v : undefined;
+        if (typeof v === "string") {
+            const s = v.replace(/,/g, "").trim();
+            const n = Number(s);
+            if (Number.isFinite(n))
+                return n;
+        }
+        return undefined;
+    })();
+    if (parsedPiecesPerUnit !== undefined) {
+        canonical.pkg = { pieces_per_unit: parsedPiecesPerUnit };
+    }
+    // Derive umbrella category: prefer 3-letter code when present, else use text classification
+    const umbrellaFromCode = mapCategoryCodeToUmbrella(row.cat);
+    const umbrella = umbrellaFromCode !== null && umbrellaFromCode !== void 0 ? umbrellaFromCode : classifyUmbrellaCategory({
+        generic_name: canonical.product.generic_name,
+        brand_name: (_21 = canonical.product.brand_name) !== null && _21 !== void 0 ? _21 : undefined,
+        category: (_22 = canonical.product.category) !== null && _22 !== void 0 ? _22 : undefined,
+        description: (_23 = canonical.product.description) !== null && _23 !== void 0 ? _23 : undefined,
+    });
+    if (umbrella) {
+        canonical.product.umbrella_category = umbrella;
     }
     return { row: canonical, errors };
 }

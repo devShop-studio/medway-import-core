@@ -1,6 +1,8 @@
 import { RawRow } from "./csv.js";
+import { UMBRELLA_CATEGORY_RULES } from "./category.js";
 import { CanonicalProduct, SourceSchema } from "./types.js";
 import { suggestHeaderMappings } from "./semantics.js";
+import { decomposeConcatenatedCell } from "./concatDecompose.js";
 
 const TEMPLATE_V3_HEADERS = [
   "Generic (International Name)",
@@ -50,6 +52,7 @@ const TEMPLATE_CHECKSUM = "b6ba6708";
 type CanonicalFlat = {
   generic_name?: string;
   brand_name?: string | null;
+  manufacturer_name?: string | null;
   strength?: string;
   form?: string;
   category?: string | null;
@@ -62,6 +65,13 @@ type CanonicalFlat = {
   frm?: string | null;
   pkg?: string | null;
   sku?: string | null;
+  requires_prescription?: string | boolean | null;
+  is_controlled?: string | boolean | null;
+  storage_conditions?: string | null;
+  description?: string | null;
+  purchase_unit?: string | null;
+  pieces_per_unit?: number | string | null;
+  unit?: string | null;
 };
 
 const HEADER_SYNONYMS: Record<keyof CanonicalFlat, string[]> = {
@@ -71,6 +81,14 @@ const HEADER_SYNONYMS: Record<keyof CanonicalFlat, string[]> = {
     "trade_name",
     "commercial_name",
     "product_name",
+  ],
+  manufacturer_name: [
+    "manufacturer",
+    "manufacturer_name",
+    "mfr",
+    "company",
+    "supplier",
+    "producer",
   ],
   generic_name: [
     "generic",
@@ -134,6 +152,13 @@ const HEADER_SYNONYMS: Record<keyof CanonicalFlat, string[]> = {
   frm: ["frm", "form_code"],
   pkg: ["pkg", "package", "package_code"],
   sku: ["sku", "item_code"],
+  requires_prescription: ["requires_prescription", "prescription", "rx", "needs_prescription"],
+  is_controlled: ["is_controlled", "controlled", "controlled_substance", "cs"],
+  storage_conditions: ["storage_conditions", "storage", "store", "handling"],
+  description: ["description", "notes", "remarks"],
+  purchase_unit: ["purchase_unit", "pack", "box", "carton"],
+  pieces_per_unit: ["pieces_per_unit", "pieces", "units_per_pack", "units_per_box"],
+  unit: ["unit", "uom", "unit_of_measure"],
 };
 
 const FORM_SYNONYMS: Record<string, string> = {
@@ -299,6 +324,15 @@ const looksLikeProductCsv = (headers: string[]): boolean => {
   );
 };
 
+/**
+ * Detect input schema from headers and optional template metadata.
+ * Returns one of:
+ * - `template_v3`: official MedWay Excel template (checksum or exact headers)
+ * - `concat_items`: Items.xlsx style with concatenated fields (alias: legacy_items)
+ * - `csv_generic`: generic CSV with fuzzy header mapping
+ * - `unknown`: unrecognized shape
+ * Signed: EyosiyasJ
+ */
 export function detectSourceSchema(
   rows: RawRow[],
   headerMeta?: { templateVersion?: string; headerChecksum?: string }
@@ -312,9 +346,12 @@ export function detectSourceSchema(
 
   const headerRow = rows[0] || {};
   const headerKeys = Object.keys(headerRow);
+  if (headerKeys.length && headerKeys.every((k) => /^col_\d+$/.test(k))) {
+    return "csv_generic";
+  }
 
   if (arraysEqualIgnoreOrder(headerKeys, LEGACY_ITEMS_HEADERS)) {
-    return "legacy_items";
+    return "concat_items";
   }
 
   // Template V3 detection based on header checksum
@@ -332,21 +369,32 @@ export function detectSourceSchema(
   return "unknown";
 }
 
+/**
+ * Map a single raw row to a partial `CanonicalProduct` based on detected schema.
+ * Supports headerless assignments for CSV when provided.
+ * Drops fully empty rows.
+ * Signed: EyosiyasJ
+ */
 export function mapRawRowToCanonical(
   raw: RawRow,
   excelRowIndex: number,
-  schema: SourceSchema
+  schema: SourceSchema,
+  headerlessAssign?: Record<string, keyof CanonicalFlat>
 ): Partial<CanonicalProduct> | null {
   if (isRowEmpty(raw)) return null;
   switch (schema) {
     case "template_v3":
       return mapTemplateV3Row(raw);
+    case "concat_items":
+      return mapConcatItemsRow(raw);
     case "legacy_items":
-      return mapLegacyItemsRow(raw);
+      return mapConcatItemsRow(raw);
     case "csv_generic":
+      if (headerlessAssign) return mapCsvHeaderlessRow(raw, headerlessAssign);
       return mapCsvGenericRow(raw);
     case "unknown":
     default:
+      if (headerlessAssign) return mapCsvHeaderlessRow(raw, headerlessAssign);
       return mapCsvGenericRow(raw);
   }
 }
@@ -358,13 +406,23 @@ function isRowEmpty(raw: RawRow): boolean {
   });
 }
 
+/**
+ * Build a partial `CanonicalProduct` from a flat, loosely-typed mapping.
+ * Ensures `product` and `batch` containers exist and moves pack contents to `pkg.pieces_per_unit`.
+ * Signed: EyosiyasJ
+ */
 function ensureCanonical(flat: CanonicalFlat): Partial<CanonicalProduct> {
   const product: CanonicalProduct["product"] = {
     generic_name: flat.generic_name ?? "",
     brand_name: flat.brand_name ?? null,
+    manufacturer_name: flat.manufacturer_name ?? null,
     strength: flat.strength ?? "",
     form: flat.form ?? "",
     category: flat.category ?? null,
+    requires_prescription: (flat.requires_prescription as any) ?? null,
+    is_controlled: (flat.is_controlled as any) ?? null,
+    storage_conditions: flat.storage_conditions ?? null,
+    description: flat.description ?? null,
   };
   const batch: CanonicalProduct["batch"] = {
     batch_no: flat.batch_no ?? "",
@@ -374,16 +432,28 @@ function ensureCanonical(flat: CanonicalFlat): Partial<CanonicalProduct> {
     coo: flat.coo ?? null,
   };
   const identity =
-    flat.cat || flat.frm || flat.pkg || flat.coo || flat.sku
+    flat.cat ||
+    flat.frm ||
+    flat.pkg ||
+    flat.coo ||
+    flat.sku ||
+    flat.purchase_unit ||
+    flat.unit
       ? {
           cat: flat.cat ?? null,
           frm: flat.frm ?? null,
           pkg: flat.pkg ?? null,
           coo: flat.coo ?? null,
           sku: flat.sku ?? null,
+          purchase_unit: flat.purchase_unit ?? null,
+          unit: flat.unit ?? null,
         }
       : undefined;
-  return { product, batch, identity };
+  const pkg =
+    typeof flat.pieces_per_unit === "number"
+      ? { pieces_per_unit: flat.pieces_per_unit }
+      : undefined;
+  return { product, batch, identity, pkg };
 }
 
 function mapTemplateV3Row(raw: RawRow): Partial<CanonicalProduct> {
@@ -399,6 +469,10 @@ function mapTemplateV3Row(raw: RawRow): Partial<CanonicalProduct> {
     unit_price: parseNumber(raw["Unit Price"]),
     coo: get("Country of Manufacture") || null,
     sku: sanitizeString(raw["Serial Number"]) || undefined,
+    brand_name: get("Brand Name") || null,
+    manufacturer_name: get("Manufacturer") || null,
+    description: get("Notes") || null,
+    pieces_per_unit: parseNumber(raw["Pack Contents"]),
   };
   return ensureCanonical(flat);
 }
@@ -415,6 +489,8 @@ function mapCsvGenericRow(raw: RawRow): Partial<CanonicalProduct> {
         return "generic_name";
       case "brand_name":
         return "brand_name";
+      case "manufacturer":
+        return "manufacturer_name";
       case "strength":
         return "strength";
       case "form":
@@ -426,7 +502,7 @@ function mapCsvGenericRow(raw: RawRow): Partial<CanonicalProduct> {
       case "batch_no":
         return "batch_no";
       case "pack_contents":
-        return "pkg"; // approximate to package code/pieces
+        return "pieces_per_unit";
       case "on_hand":
         return "on_hand";
       case "unit_price":
@@ -435,10 +511,20 @@ function mapCsvGenericRow(raw: RawRow): Partial<CanonicalProduct> {
         return "coo";
       case "sku":
         return "sku";
-      case "manufacturer":
-        return undefined;
+      case "requires_prescription":
+        return "requires_prescription";
+      case "is_controlled":
+        return "is_controlled";
+      case "storage_conditions":
+        return "storage_conditions";
       case "notes":
-        return undefined;
+        return "description";
+      case "purchase_unit":
+        return "purchase_unit";
+      case "pieces_per_unit":
+        return "pieces_per_unit";
+      case "unit":
+        return "unit";
       default:
         return undefined;
     }
@@ -461,6 +547,9 @@ function mapCsvGenericRow(raw: RawRow): Partial<CanonicalProduct> {
       case "unit_price":
         assignField(mapped, parseNumber(val));
         break;
+      case "pieces_per_unit":
+        assignField(mapped, parseNumber(val));
+        break;
       case "form":
         flat.form = canonicalizeForm(sanitizeString(val));
         break;
@@ -471,7 +560,375 @@ function mapCsvGenericRow(raw: RawRow): Partial<CanonicalProduct> {
   return ensureCanonical(flat);
 }
 
-function mapLegacyItemsRow(raw: RawRow): Partial<CanonicalProduct> {
+function mapCsvHeaderlessRow(raw: RawRow, assign: Record<string, keyof CanonicalFlat>): Partial<CanonicalProduct> {
+  const flat: CanonicalFlat = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const mapped = assign[key];
+    if (!mapped) continue;
+    switch (mapped) {
+      case "on_hand":
+      case "unit_price":
+      case "pieces_per_unit":
+        flat[mapped] = parseNumber(value) as any;
+        break;
+      case "form":
+        flat.form = canonicalizeForm(String(value ?? "")) as any;
+        break;
+      default:
+        (flat as any)[mapped] = value as any;
+    }
+  }
+  return ensureCanonical(flat);
+}
+
+/**
+ * Infer headerless column assignments to canonical fields using value-shape heuristics.
+ * Includes packaging: classify small integer columns as `pieces_per_unit`.
+ * Signed: EyosiyasJ
+ */
+export function inferHeaderlessAssignments(rows: RawRow[]): Record<string, keyof CanonicalFlat> {
+  const keys = Object.keys(rows[0] || {});
+  const colValues: Record<string, any[]> = {};
+  for (const k of keys) colValues[k] = [];
+  const sampleLimit = Math.min(rows.length, 100);
+  for (let i = 0; i < sampleLimit; i++) {
+    const r = rows[i];
+    for (const k of keys) {
+      const v = r[k];
+      if (v !== undefined && v !== null && String(v).trim() !== "") colValues[k].push(v);
+    }
+  }
+  const score: Record<string, Partial<Record<keyof CanonicalFlat, number>>> = {};
+  const isInt = (s: any) => /^[-+]?\d+$/.test(String(s).trim());
+  const isFloat = (s: any) => /^[-+]?\d+([.,]\d+)$/.test(String(s).trim());
+  const isDate = (s: any) => /^\d{4}-\d{2}-\d{2}$/.test(String(s).trim()) || /^\d{2}[\/-]\d{2}[\/-]\d{2,4}$/.test(String(s).trim()) || /^\d{3,5}$/.test(String(s).trim());
+  const isStrength = (s: any) => /\b\d+(?:\.\d+)?\s*(mg|mcg|g|ml|%)(?:\s*\/\s*\d+(?:\.\d+)?\s*(mg|mcg|g|ml))?\b/i.test(String(s));
+  const isForm = (s: any) => {
+    const f = String(s).toLowerCase().trim();
+    return Boolean(FORM_SYNONYMS[f] || ["tablet","tab","capsule","cap","syrup","cream","ointment","inj","injection","solution"].includes(f));
+  };
+  const isCountry = (s: any) => {
+    const v = String(s).trim();
+    return /^[A-Z]{2}$/.test(v) || /\b(ethiopia|india|germany|china|united states|united kingdom|france|italy|spain|kenya|south africa)\b/i.test(v);
+  };
+  const CATEGORY_KEYWORDS = new Set<string>(UMBRELLA_CATEGORY_RULES.flatMap((r) => r.categoryKeywords.map((k) => k.toLowerCase())));
+  const isCategoryTerm = (s: any) => {
+    const v = String(s).toLowerCase().trim();
+    if (!v) return false;
+    for (const k of CATEGORY_KEYWORDS) { if (v.includes(k)) return true; }
+    return false;
+  };
+  const avgLen = (arr: any[]) => arr.length ? arr.reduce((a,b)=>a+String(b).length,0)/arr.length : 0;
+  const uniqRatio = (arr: any[]) => arr.length ? (new Set(arr.map((x)=>String(x)))).size/arr.length : 0;
+
+  for (const k of keys) {
+    const vals = colValues[k];
+    const n = vals.length || 1;
+    const digitsOnly = (s: any) => String(s).trim().replace(/\D+/g, "");
+    const isGtin13 = (s: any) => /^\d{13}$/.test(digitsOnly(s));
+    const pGtin13 = vals.filter(isGtin13).length / n;
+    const hasAlpha = (s: any) => /[A-Za-z]/.test(String(s));
+    const pAlpha = vals.filter(hasAlpha).length / n;
+    const pInt = vals.filter(isInt).length / n;
+    const pFloat = vals.filter(isFloat).length / n;
+    const pNum = vals.filter((v) => isInt(v) || isFloat(v)).length / n;
+    const pDate = vals.filter(isDate).length / n;
+    const pStrength = vals.filter(isStrength).length / n;
+    const pForm = vals.filter(isForm).length / n;
+    const pCountry = vals.filter(isCountry).length / n;
+    const len = avgLen(vals);
+    const uniq = uniqRatio(vals);
+    const intVals = vals
+      .map((v) => Number(String(v).replace(/,/g, "").trim()))
+      .filter((x) => Number.isFinite(x) && Math.floor(x) === x);
+    const minInt = intVals.length ? Math.min(...intVals) : Infinity;
+    const maxInt = intVals.length ? Math.max(...intVals) : -Infinity;
+    score[k] = {};
+    score[k]["sku"] = pGtin13 >= 0.9 ? 0.98 : pGtin13 >= 0.6 ? 0.7 : 0.0;
+    score[k]["on_hand"] = pGtin13 >= 0.9 ? 0.0 : (pInt >= 0.9 && len <= 6 ? 0.9 + Math.max(0, 0.1 - pFloat) : pInt >= 0.7 ? 0.6 : 0.0);
+    score[k]["unit_price"] = pNum >= 0.9 && pFloat >= 0.5 ? 0.9 : pFloat >= 0.3 ? 0.6 : 0.0;
+    score[k]["expiry_date"] = pDate >= 0.8 ? 0.95 : pDate >= 0.5 ? 0.7 : 0.0;
+    score[k]["batch_no"] = pNum < 0.4 && len >= 4 && len <= 20 && uniq >= 0.5 ? 0.8 : 0.0;
+    score[k]["strength"] = pStrength >= 0.5 ? 0.9 : 0.0;
+    score[k]["form"] = pForm >= 0.5 ? 0.9 : 0.0;
+    score[k]["coo"] = pCountry >= 0.5 ? 0.9 : 0.0;
+    const pCat = vals.filter(isCategoryTerm).length / n;
+    score[k]["category"] = pCat >= 0.6 ? 0.9 : pCat >= 0.3 ? 0.6 : 0.0;
+    score[k]["generic_name"] = (pAlpha >= 0.2) && (len >= 6 && uniq >= 0.7) ? 0.85 : (pAlpha >= 0.2 && len >= 10 ? 0.7 : 0.0);
+    score[k]["pieces_per_unit"] =
+      pInt >= 0.9 && pFloat < 0.1 && minInt >= 1 && maxInt <= 500 && uniq <= 0.5
+        ? 0.9
+        : pInt >= 0.8 && maxInt <= 200
+        ? 0.7
+        : 0.0;
+    const PURCHASE_UNITS = new Set(["box","bottle","strip","vial","ampoule","device"]);
+    const isPurchaseUnit = (s: any) => PURCHASE_UNITS.has(String(s).toLowerCase().trim());
+    const pPU = vals.filter(isPurchaseUnit).length / n;
+    score[k]["purchase_unit"] = pPU >= 0.95 ? 0.95 : pPU >= 0.7 ? 0.7 : 0.0;
+    const isRxOtc = (s: any) => /^(rx|otc)$/i.test(String(s).trim());
+    const pRxOtc = vals.filter(isRxOtc).length / n;
+    score[k]["requires_prescription"] = pRxOtc >= 0.95 ? 0.95 : pRxOtc >= 0.7 ? 0.7 : 0.0;
+  }
+
+  // Choose best per canonical, prefer one-to-one
+  const assignment: Record<string, keyof CanonicalFlat> = {};
+  const takenCanon = new Set<keyof CanonicalFlat>();
+  const candidates: Array<{ col: string; canon: keyof CanonicalFlat; sc: number }> = [];
+  for (const k of keys) {
+    const s = score[k]!;
+    for (const canon of Object.keys(s) as Array<keyof CanonicalFlat>) {
+      const sc = (s as any)[canon] ?? 0;
+      if (sc >= 0.6) candidates.push({ col: k, canon, sc });
+    }
+  }
+  candidates.sort((a,b)=>b.sc - a.sc);
+  for (const c of candidates) {
+    if (assignment[c.col]) continue;
+    if (takenCanon.has(c.canon)) continue;
+    assignment[c.col] = c.canon;
+    takenCanon.add(c.canon);
+  }
+  return assignment;
+}
+
+/**
+ * Produce column guesses with candidates and confidence for headerless files.
+ * Includes packaging guess for `pieces_per_unit`.
+ * Signed: EyosiyasJ
+ */
+export function inferHeaderlessGuesses(rows: RawRow[]): {
+  assignment: Record<string, keyof CanonicalFlat>;
+  guesses: Array<{ key: string; index: number; candidates: Array<{ canon: keyof CanonicalFlat; score: number }>; sample: string[] }>;
+} {
+  const keys = Object.keys(rows[0] || {});
+  const colValues: Record<string, any[]> = {};
+  for (const k of keys) colValues[k] = [];
+  const sampleLimit = Math.min(rows.length, 100);
+  for (let i = 0; i < sampleLimit; i++) {
+    const r = rows[i];
+    for (const k of keys) {
+      const v = r[k];
+      if (v !== undefined && v !== null && String(v).trim() !== "") colValues[k].push(v);
+    }
+  }
+  const score: Record<string, Partial<Record<keyof CanonicalFlat, number>>> = {};
+  const isInt = (s: any) => /^[-+]?\d+$/.test(String(s).trim());
+  const isFloat = (s: any) => /^[-+]?\d+([.,]\d+)$/.test(String(s).trim());
+  const isNum = (s: any) => /^[-+]?\d+(?:[.,]\d+)?$/.test(String(s).trim());
+  const isDate = (s: any) => /^\d{4}-\d{2}-\d{2}$/.test(String(s).trim()) || /^\d{2}[\/-]\d{2}[\/-]\d{2,4}$/.test(String(s).trim()) || /^\d{3,5}$/.test(String(s).trim());
+  const isStrength = (s: any) => /\b\d+(?:\.\d+)?\s*(mg|mcg|g|ml|%)(?:\s*\/\s*\d+(?:\.\d+)?\s*(mg|mcg|g|ml))?\b/i.test(String(s));
+  const isForm = (s: any) => {
+    const f = String(s).toLowerCase().trim();
+    return Boolean(FORM_SYNONYMS[f] || ["tablet","tab","capsule","cap","syrup","cream","ointment","inj","injection","solution"].includes(f));
+  };
+  const isCountry = (s: any) => {
+    const v = String(s).trim();
+    return /^[A-Z]{2}$/.test(v) || /\b(ethiopia|india|germany|china|united states|united kingdom|france|italy|spain|kenya|south africa)\b/i.test(v);
+  };
+  const CATEGORY_KEYWORDS = new Set<string>(UMBRELLA_CATEGORY_RULES.flatMap((r) => r.categoryKeywords.map((k) => k.toLowerCase())));
+  const isCategoryTerm = (s: any) => {
+    const v = String(s).toLowerCase().trim();
+    if (!v) return false;
+    for (const k of CATEGORY_KEYWORDS) { if (v.includes(k)) return true; }
+    return false;
+  };
+  const avgLen = (arr: any[]) => arr.length ? arr.reduce((a,b)=>a+String(b).length,0)/arr.length : 0;
+  const uniqRatio = (arr: any[]) => arr.length ? (new Set(arr.map((x)=>String(x)))).size/arr.length : 0;
+
+  for (const k of keys) {
+    const vals = colValues[k];
+    const n = vals.length || 1;
+    const digitsOnly = (s: any) => String(s).trim().replace(/\D+/g, "");
+    const isGtin13 = (s: any) => /^\d{13}$/.test(digitsOnly(s));
+    const pGtin13 = vals.filter(isGtin13).length / n;
+    const hasAlpha = (s: any) => /[A-Za-z]/.test(String(s));
+    const pAlpha = vals.filter(hasAlpha).length / n;
+    const pInt = vals.filter(isInt).length / n;
+    const pFloat = vals.filter(isFloat).length / n;
+    const pNum = vals.filter(isNum).length / n;
+    const pDate = vals.filter(isDate).length / n;
+    const pStrength = vals.filter(isStrength).length / n;
+    const pForm = vals.filter(isForm).length / n;
+    const pCountry = vals.filter(isCountry).length / n;
+    const len = avgLen(vals);
+    const uniq = uniqRatio(vals);
+    const intVals = vals
+      .map((v) => Number(String(v).replace(/,/g, "").trim()))
+      .filter((x) => Number.isFinite(x) && Math.floor(x) === x);
+    const minInt = intVals.length ? Math.min(...intVals) : Infinity;
+    const maxInt = intVals.length ? Math.max(...intVals) : -Infinity;
+    score[k] = {};
+    score[k]["sku"] = pGtin13 >= 0.9 ? 0.98 : pGtin13 >= 0.6 ? 0.7 : 0.0;
+    score[k]["on_hand"] = pGtin13 >= 0.9 ? 0.0 : (pInt >= 0.9 && len <= 6 ? 0.9 + Math.max(0, 0.1 - pFloat) : pInt >= 0.7 ? 0.6 : 0.0);
+    score[k]["unit_price"] = pNum >= 0.9 && pFloat >= 0.5 ? 0.9 : pFloat >= 0.3 ? 0.6 : 0.0;
+    score[k]["expiry_date"] = pDate >= 0.8 ? 0.95 : pDate >= 0.5 ? 0.7 : 0.0;
+    score[k]["batch_no"] = pNum < 0.4 && len >= 4 && len <= 20 && uniq >= 0.5 ? 0.8 : 0.0;
+    score[k]["strength"] = pStrength >= 0.5 ? 0.9 : 0.0;
+    score[k]["form"] = pForm >= 0.5 ? 0.9 : 0.0;
+    score[k]["coo"] = pCountry >= 0.5 ? 0.9 : 0.0;
+    const pCat = vals.filter(isCategoryTerm).length / n;
+    score[k]["category"] = pCat >= 0.6 ? 0.9 : pCat >= 0.3 ? 0.6 : 0.0;
+    score[k]["generic_name"] = (pAlpha >= 0.2) && (len >= 6 && uniq >= 0.7) ? 0.85 : (pAlpha >= 0.2 && len >= 10 ? 0.7 : 0.0);
+    score[k]["pieces_per_unit"] =
+      pInt >= 0.9 && pFloat < 0.1 && minInt >= 1 && maxInt <= 500 && uniq <= 0.5
+        ? 0.9
+        : pInt >= 0.8 && maxInt <= 200
+        ? 0.7
+        : 0.0;
+    const PURCHASE_UNITS = new Set(["box","bottle","strip","vial","ampoule","device"]);
+    const isPurchaseUnit = (s: any) => PURCHASE_UNITS.has(String(s).toLowerCase().trim());
+    const pPU = vals.filter(isPurchaseUnit).length / n;
+    score[k]["purchase_unit"] = pPU >= 0.95 ? 0.95 : pPU >= 0.7 ? 0.7 : 0.0;
+    const isRxOtc = (s: any) => /^(rx|otc)$/i.test(String(s).trim());
+    const pRxOtc = vals.filter(isRxOtc).length / n;
+    score[k]["requires_prescription"] = pRxOtc >= 0.95 ? 0.95 : pRxOtc >= 0.7 ? 0.7 : 0.0;
+  }
+
+  const assignment: Record<string, keyof CanonicalFlat> = {};
+  const takenCanon = new Set<keyof CanonicalFlat>();
+  const candidatesList: Array<{ key: string; index: number; candidates: Array<{ canon: keyof CanonicalFlat; score: number }>; sample: string[] }> = [];
+  for (const k of keys) {
+    const s = score[k]!;
+    const cands = Object.keys(s).map((canon) => ({ canon: canon as keyof CanonicalFlat, score: (s as any)[canon] ?? 0 }))
+      .filter((c) => c.score > 0)
+      .sort((a,b)=>b.score - a.score);
+    const idx = /^col_(\d+)$/.exec(k)?.[1];
+    candidatesList.push({ key: k, index: idx ? Number(idx) - 1 : keys.indexOf(k), candidates: cands, sample: colValues[k].slice(0, 3).map((v)=>String(v)) });
+  }
+  const flatCands: Array<{ col: string; canon: keyof CanonicalFlat; sc: number }> = [];
+  for (const cg of candidatesList) {
+    for (const c of cg.candidates) {
+      if (c.score >= 0.6) flatCands.push({ col: cg.key, canon: c.canon, sc: c.score });
+    }
+  }
+  flatCands.sort((a,b)=>b.sc - a.sc);
+  for (const c of flatCands) {
+    if (assignment[c.col]) continue;
+    if (takenCanon.has(c.canon)) continue;
+    assignment[c.col] = c.canon;
+    takenCanon.add(c.canon);
+  }
+  return { assignment, guesses: candidatesList };
+}
+
+/**
+ * Detect columns that likely contain concatenated fields (name + strength + form).
+ * Heuristic: ≥70% of sampled values contain both a strength pattern and a form keyword.
+ * Signed: EyosiyasJ
+ */
+/**
+ * Decide if a header is trusted based on semantic scoring across sample rows.
+ * Uses a stricter threshold so weak labels (e.g. "Name") are treated as headerless.
+ * Signed: EyosiyasJ
+ */
+function isHeaderTrusted(headers: string[], sampleRows: RawRow[], header: string, threshold = 0.8): { trusted: boolean; key?: keyof CanonicalFlat; confidence: number } {
+  const hints = suggestHeaderMappings(headers, sampleRows);
+  const hint = hints.find((h) => h.header === header);
+  const conf = hint?.confidence ?? 0;
+  return { trusted: conf >= threshold, key: (hint?.key as keyof CanonicalFlat | undefined), confidence: conf };
+}
+
+/**
+ * Quick content-based filter for obviously atomic columns we should not treat as concatenated.
+ * Avoids GTIN, price, quantity, expiry, COO, SKU-like codes.
+ * Signed: EyosiyasJ
+ */
+function isAtomicContentColumn(values: any[]): boolean {
+  const n = values.length || 1;
+  const onlyDigits = (s: any) => String(s).trim().replace(/\D+/g, "");
+  const isGtin13 = (s: any) => /^\d{13}$/.test(onlyDigits(s));
+  const looksPrice = (s: any) => /^[-+]?\d+(?:[.,]\d{1,2})?(\s*(etb|birr|usd))?$/i.test(String(s).trim());
+  const looksQtyInt = (s: any) => /^\d+$/.test(String(s).trim());
+  const looksDate = (s: any) => /\b\d{4}-\d{2}-\d{2}\b/.test(String(s)) || /\b\d{2}[\/-]\d{2}[\/-]\d{2,4}\b/.test(String(s));
+  const looksISO2 = (s: any) => /^[A-Za-z]{2}$/.test(String(s).trim());
+  const alphaNumCode = (s: any) => /^[A-Za-z0-9-]{6,}$/.test(String(s).trim());
+  const pGtin = values.filter(isGtin13).length / n;
+  const pPrice = values.filter(looksPrice).length / n;
+  const pQty = values.filter(looksQtyInt).length / n;
+  const pDate = values.filter(looksDate).length / n;
+  const pISO2 = values.filter(looksISO2).length / n;
+  const pCode = values.filter(alphaNumCode).length / n;
+  return pGtin >= 0.6 || pPrice >= 0.6 || pQty >= 0.8 || pDate >= 0.6 || pISO2 >= 0.6 || pCode >= 0.7;
+}
+
+/**
+ * Detect if a text looks like a pure formula/ingredients list with separators and no numeric+unit tokens.
+ * Examples: "alumina, magnesia and simethicone".
+ * Signed: EyosiyasJ
+ */
+function looksFormulaLike(s: string): boolean {
+  const t = String(s ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const sepCount = (t.match(/[,+&]/g) || []).length + (t.includes(" and ") ? 1 : 0);
+  const hasUnit = /\b\d+(?:\.\d+)?\s*(mg|mcg|g|iu|ml|%)\b/.test(t) || /\b\d+(?:\.\d+)?\s*(mg|mcg|g|ml)\s*\/\s*\d+(?:\.\d+)?\s*(mg|mcg|g|ml)\b/.test(t);
+  const hasPack = /(\b\d+\s*[xX]\s*\d+|\b\d+\s*(?:'s|pcs|pieces|tabs|caps)\b)/.test(t);
+  const words = t.split(/[^a-z]+/).filter(Boolean);
+  const longWords = words.filter((w) => w.length >= 6).length;
+  return sepCount >= 1 && !hasUnit && !hasPack && longWords >= 2;
+}
+
+/**
+ * Column-level concatenation detector using content signals rather than headers.
+ * Criteria: sample values with ≥2 signals among strength/form/pack/country/GTIN/batch should be present in ≥70% rows,
+ * and formula-like patterns must not dominate.
+ * Skips obviously atomic columns.
+ * Signed: EyosiyasJ
+ */
+/**
+ * Identify columns likely to contain concatenated product text for pre-sanitize decomposition.
+ * Flags a column when ≥70% of sampled non-empty cells have ≥2 signals among
+ * {strength, form, pack, country, batch, GTIN} with formula-rate ≤30%.
+ * Signed: EyosiyasJ
+ */
+export function inferConcatenatedColumns(rows: RawRow[]): Array<{ index: number; reason: string }> {
+  const keys = Object.keys(rows[0] || {});
+  if (!keys.length) return [];
+  const sampleLimit = Math.min(rows.length, 30);
+  const sampleRows = rows.slice(0, sampleLimit);
+  const result: Array<{ index: number; reason: string }> = [];
+  for (let colIdx = 0; colIdx < keys.length; colIdx++) {
+    const k = keys[colIdx];
+    const values: any[] = [];
+    for (let i = 0; i < sampleLimit; i++) {
+      const v = rows[i]?.[k];
+      if (v !== undefined && v !== null && String(v).trim() !== "") values.push(v);
+    }
+    if (!values.length) continue;
+    if (isAtomicContentColumn(values)) continue;
+
+    const headers = keys;
+    const trusted = isHeaderTrusted(headers, sampleRows, k, 0.8);
+    if (trusted.trusted) {
+      const atomicTrusted = ["gtin", "unit_price", "on_hand", "expiry_date", "coo", "sku"].includes(String(trusted.key));
+      if (atomicTrusted) continue;
+    }
+
+    let signalRows = 0;
+    let formulaRows = 0;
+    for (const v of values) {
+      const s = String(v);
+      if (looksFormulaLike(s)) { formulaRows++; continue; }
+      const { extractions } = decomposeConcatenatedCell(s);
+      const hasStrength = extractions.some((e) => e.field === "product.strength");
+      const hasForm = extractions.some((e) => e.field === "product.form");
+      const hasPack = extractions.some((e) => e.field === "pkg.pieces_per_unit");
+      const hasCountry = extractions.some((e) => e.field === "identity.coo");
+      const hasBatch = extractions.some((e) => e.field === "batch.batch_no");
+      const hasGtin = extractions.some((e) => e.field === "identity.sku") || /\b\d{13}\b/.test(s.replace(/\D+/g, ""));
+      const perRowSignals = [hasStrength, hasForm, hasPack, hasCountry, hasBatch, hasGtin].filter(Boolean).length;
+      if (perRowSignals >= 2) { signalRows++; }
+    }
+    const n = values.length;
+    const coverage = signalRows / n;
+    const formulaRate = formulaRows / n;
+    if (coverage >= 0.7 && formulaRate <= 0.3) {
+      result.push({ index: colIdx, reason: `concat_signals>=2 in ${(coverage*100).toFixed(0)}% rows; formulaRate ${(Math.round(formulaRate*100))}%` });
+    }
+  }
+  return result;
+}
+
+function mapConcatItemsRow(raw: RawRow): Partial<CanonicalProduct> {
   const flat: CanonicalFlat = {};
   const name = sanitizeString(raw["Name"]);
   const desc = sanitizeString(raw["Description"]);

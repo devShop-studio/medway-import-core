@@ -17,9 +17,12 @@
   },
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "parse-file": "node scripts/parse-file.mjs",
+    "test": "node tests/run-tests.mjs"
   },
   "dependencies": {
+    "i18n-iso-countries": "^7.14.0",
     "xlsx": "^0.18.0"
   },
   "devDependencies": {

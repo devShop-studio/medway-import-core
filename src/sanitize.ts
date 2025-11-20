@@ -1,5 +1,18 @@
-import type { CanonicalProduct, ParsedRowError } from "./types.js";
+import type { CanonicalProduct, ParsedRowError, SourceSchema } from "./types.js";
+import { classifyUmbrellaCategory, mapCategoryCodeToUmbrella } from "./category.js";
+import { normalizeCountryToIso2 } from "./country.js";
 
+/**
+ * Module: Field Sanitizers & Row Validation
+ * Purpose: Normalize and validate loosely-typed product fields into canonical shapes.
+ * Features:
+ * - Fuzzy form normalization with autocorrect and hygiene warnings (no digits rule).
+ * - Strength normalization supporting ratios and percent formats.
+ * - Flexible GTIN, batch, number, and date parsers with bounds and warnings.
+ * - Schema-aware row validation (best-effort for `concat_items` when no dose signal).
+ * - Validation modes: `full`, `errorsOnly`, `none`.
+ * Signed: EyosiyasJ
+ */
 // Shared, field-level sanitizers (moved from web importer).
 export type IssueLevel = "error" | "warn";
 export type Issue = { field: string; code: string; msg: string; level: IssueLevel };
@@ -9,6 +22,7 @@ export interface CanonicalRowInput {
   strength?: unknown;
   form?: unknown;
   brand_name?: unknown;
+  manufacturer_name?: unknown;
   gtin?: unknown;
   category?: unknown;
   requires_prescription?: unknown;
@@ -35,6 +49,7 @@ export interface SanitizedRow {
   strength?: string;
   form?: FormEnum;
   brand_name?: string;
+  manufacturer_name?: string;
   gtin?: string;
   category?: string;
   requires_prescription?: boolean;
@@ -56,7 +71,7 @@ export interface SanitizedRow {
   sku?: string;
 }
 
-const FORM_ENUM = ["tablet", "capsule", "syrup", "injection", "cream", "ointment", "drops", "inhaler", "other"] as const;
+const FORM_ENUM = ["tablet", "capsule", "syrup", "injection", "cream", "ointment", "drops", "inhaler", "suspension", "solution", "gel", "spray", "lotion", "patch", "powder", "other"] as const;
 type FormEnum = (typeof FORM_ENUM)[number];
 type IdentityFields = NonNullable<CanonicalProduct["identity"]>;
 
@@ -88,6 +103,13 @@ const FORM_SYNONYMS: Record<string, FormEnum> = {
   drops: "drops",
   inh: "inhaler",
   inhaler: "inhaler",
+  suspension: "suspension",
+  solution: "solution",
+  gel: "gel",
+  spray: "spray",
+  lotion: "lotion",
+  patch: "patch",
+  powder: "powder",
   suppository: "other",
   suppositories: "other",
   "topical medicines": "other",
@@ -102,6 +124,8 @@ const asciiLower = (s: unknown): string =>
     .trim();
 const collapseWS = (s: string): string => s.replace(/\s+/g, " ").trim();
 const onlyDigits = (s: string): string => s.replace(/\D+/g, "");
+const hasDigit = (s: string): boolean => /\d/.test(String(s ?? ""));
+const hasUnitToken = (s: string): boolean => /(mg|mcg|g|ml|iu|%)/i.test(String(s ?? ""));
 
 const lev = (a: string, b: string): number => {
   const m = a.length,
@@ -117,10 +141,18 @@ const lev = (a: string, b: string): number => {
   return d[m][n];
 };
 
+/**
+ * Normalize free-text dosage form to canonical enum with fuzzy match and hygiene checks.
+ * Enforces no-digits rule (warn) and autocorrects close variants; errors on unknowns.
+ * Signed: EyosiyasJ
+ */
 export function sanitizeForm(v: unknown): { value?: FormEnum; issues: Issue[]; suggestion?: FormEnum } {
   const issues: Issue[] = [];
   const raw = asciiLower(v);
   if (!raw) return { issues: [{ field: "form", code: "E_FORM_MISSING", msg: "form required", level: "error" }] };
+  if (hasDigit(raw) || hasUnitToken(raw)) {
+    issues.push({ field: "form", code: "E_TEXT_DIGITS_SUSPECT", msg: "form must not contain digits/units", level: "warn" });
+  }
   if (FORM_SYNONYMS[raw]) return { value: FORM_SYNONYMS[raw], issues };
   const candidates = [...Object.keys(FORM_SYNONYMS), ...FORM_ENUM];
   let best: { key: string; dist: number; mapped: FormEnum } | null = null;
@@ -132,11 +164,11 @@ export function sanitizeForm(v: unknown): { value?: FormEnum; issues: Issue[]; s
   if (best && best.dist <= 2) {
     return {
       value: best.mapped,
-      issues: [{ field: "form", code: "W_FORM_AUTOCORRECT", msg: `autocorrected "${v}"→"${best.mapped}"`, level: "warn" }],
+      issues: [{ field: "form", code: "W_FORM_AUTOCORRECT", msg: `autocorrected "${v}"→"${best.mapped}"`, level: "warn" }, ...issues],
       suggestion: best.mapped,
     };
   }
-  return { issues: [{ field: "form", code: "E_FORM_INVALID", msg: `invalid form "${v}"`, level: "error" }] };
+  return { issues: [...issues, { field: "form", code: "E_FORM_INVALID", msg: `invalid form "${v}"`, level: "error" }] };
 }
 
 export function sanitizeStrength(v: unknown): { value?: string; issues: Issue[] } {
@@ -172,8 +204,8 @@ export function sanitizeGTIN(v: unknown): { value?: string; issues: Issue[] } {
 export function sanitizeBool(v: unknown): { value?: boolean; issues: Issue[] } {
   const s = asciiLower(v);
   if (!s) return { issues: [] };
-  if (["true", "yes", "1", "y"].includes(s)) return { value: true, issues: [] };
-  if (["false", "no", "0", "n"].includes(s)) return { value: false, issues: [] };
+  if (["true", "yes", "1", "y", "rx"].includes(s)) return { value: true, issues: [] };
+  if (["false", "no", "0", "n", "otc"].includes(s)) return { value: false, issues: [] };
   return { issues: [{ field: "boolean", code: "E_BOOL", msg: `not a boolean: "${v}"`, level: "error" }] };
 }
 
@@ -181,6 +213,8 @@ export function sanitizeBatchNo(v: unknown): { value?: string; issues: Issue[] }
   const issues: Issue[] = [];
   if (!v) return { issues };
   let s = String(v).toUpperCase();
+  const labeled = s.match(/\bB[0-9A-Z]{3,}\b/);
+  if (labeled) s = labeled[0];
   s = s.replace(/[^A-Z0-9./-]/g, "");
   s = s.replace(/\.{2,}/g, ".");
   s = s.replace(/-{2,}/g, "-");
@@ -289,6 +323,12 @@ export function sanitizeRow(input: CanonicalRowInput): { row: SanitizedRow; issu
   issues.push(...f.issues);
 
   out.brand_name = collapseWS(String(input.brand_name ?? "")).trim() || undefined;
+  out.manufacturer_name = collapseWS(String(input.manufacturer_name ?? "")).trim() || undefined;
+
+  // No-digits rule: text-only fields should not contain digits or unit tokens
+  if (out.manufacturer_name && (hasDigit(out.manufacturer_name) || hasUnitToken(out.manufacturer_name))) {
+    issues.push({ field: "manufacturer_name", code: "E_TEXT_DIGITS_SUSPECT", msg: "manufacturer must not contain digits/units", level: "warn" });
+  }
 
   const st = sanitizeStrength(input.strength);
   if (st.value !== undefined) out.strength = st.value;
@@ -299,6 +339,9 @@ export function sanitizeRow(input: CanonicalRowInput): { row: SanitizedRow; issu
   issues.push(...gt.issues);
 
   out.category = collapseWS(String(input.category ?? "")).trim() || undefined;
+  if (out.category && (hasDigit(out.category) || hasUnitToken(out.category))) {
+    issues.push({ field: "category", code: "E_TEXT_DIGITS_SUSPECT", msg: "category must not contain digits/units", level: "warn" });
+  }
 
   const rp = sanitizeBool(input.requires_prescription);
   if (rp.value !== undefined) out.requires_prescription = rp.value;
@@ -311,24 +354,16 @@ export function sanitizeRow(input: CanonicalRowInput): { row: SanitizedRow; issu
   out.storage_conditions = collapseWS(String(input.storage_conditions ?? "")).trim() || undefined;
   out.description = collapseWS(String(input.description ?? "")).trim() || undefined;
 
-  const hasStock = !!(input.batch_no || input.expiry_date || input.on_hand || input.unit_price || input.reserved);
   const bn = sanitizeBatchNo(input.batch_no);
-  const ex = sanitizeExpiry(input.expiry_date);
+  const expiryIsoFlex = parseDateFlexible(input.expiry_date);
   const q = sanitizeNumber(input.on_hand, { ge: 0 });
   const pr = sanitizeNumber(input.unit_price, { gt: 0 });
   const rv = sanitizeNumber(input.reserved ?? 0, { ge: 0 });
 
-  if (hasStock) {
-    if (!bn.value) issues.push({ field: "batch_no", code: "E_STOCK_BATCH_REQUIRED", msg: "batch_no required when stock present", level: "error" });
-    if (!ex.value) issues.push({ field: "expiry_date", code: "E_STOCK_EXPIRY_REQUIRED", msg: "expiry_date required when stock present", level: "error" });
-    if (q.value === undefined) issues.push({ field: "on_hand", code: "E_STOCK_QTY_REQUIRED", msg: "on_hand required when stock present", level: "error" });
-    if (pr.value === undefined) issues.push({ field: "unit_price", code: "E_STOCK_PRICE_REQUIRED", msg: "unit_price required when stock present", level: "error" });
-  }
-
-  issues.push(...bn.issues, ...ex.issues, ...q.issues, ...pr.issues, ...rv.issues);
+  issues.push(...bn.issues, ...q.issues, ...pr.issues, ...rv.issues);
 
   out.batch_no = bn.value;
-  out.expiry_date = ex.value;
+  out.expiry_date = expiryIsoFlex ?? (collapseWS(String(input.expiry_date ?? "")).trim() || undefined);
   out.on_hand = q.value;
   out.unit_price = pr.value;
   out.reserved = rv.value ?? 0;
@@ -353,8 +388,14 @@ export function sanitizeRow(input: CanonicalRowInput): { row: SanitizedRow; issu
     if (pc.value !== undefined) out.pkg = pc.value;
     issues.push(...pc.issues);
   }
+  // Country normalization via ISO dataset with alias+fuzzy layer
   if (input.coo !== undefined && hasVal(input.coo)) {
-    const cc = sanitizeCountryCode(input.coo);
+    const cooRaw = collapseWS(String(input.coo ?? "")).trim();
+    if (cooRaw && hasDigit(cooRaw)) {
+      issues.push({ field: "coo", code: "E_TEXT_DIGITS_SUSPECT", msg: "country must not contain digits", level: "warn" });
+    }
+    const iso2 = normalizeCountryToIso2(String(input.coo)) || String(input.coo);
+    const cc = sanitizeCountryCode(iso2);
     if (cc.value !== undefined) out.coo = cc.value;
     issues.push(...cc.issues);
   }
@@ -373,6 +414,16 @@ const ddmmyyyyToIso = (s: string | undefined): string | undefined => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
+/**
+ * Parse common expiry formats into deterministic ISO date (YYYY-MM-DD).
+ * Supports:
+ * - ISO `YYYY-MM-DD` pass-through
+ * - `DD/MM/YYYY` → ISO
+ * - Excel serial (>=60) → ISO
+ * - `MMM-YY`, `MMM/YY`, `MMM YYYY` (e.g., `Nov-28`, `Feb/2028`) → last day of month
+ * - `MM-YY`, `MM/YY`, `MM YYYY` (e.g., `11-28`, `07/2030`) → last day of month
+ * Signed: EyosiyasJ
+ */
 const parseDateFlexible = (value: unknown): string | undefined => {
   if (value === undefined || value === null || value === "") return undefined;
   const s = String(value).trim();
@@ -380,6 +431,8 @@ const parseDateFlexible = (value: unknown): string | undefined => {
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   const iso = ddmmyyyyToIso(s);
   if (iso) return iso;
+
+  // Excel serial dates
   if (/^\d{3,5}$/.test(s)) {
     const serial = Number(s);
     if (Number.isFinite(serial) && serial > 59 && serial < 400000) {
@@ -389,6 +442,40 @@ const parseDateFlexible = (value: unknown): string | undefined => {
       if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
     }
   }
+
+  // Month tokens
+  const MONTHS: Record<string, number> = {
+    jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+    jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
+  };
+
+  const norm = s.toLowerCase().replace(/[,]/g, "").replace(/\s+/g, " ").trim();
+  const parts = norm.split(/[-/ ]+/).filter(Boolean);
+
+  const lastDayOfMonth = (y: number, m1to12: number): string => {
+    const mm = String(m1to12).padStart(2, "0");
+    const end = new Date(y, m1to12, 0).getDate();
+    const dd = String(end).padStart(2, "0");
+    return `${y}-${mm}-${dd}`;
+  };
+
+  // Named month patterns: MMM-YY or MMM YYYY
+  if (parts.length === 2 && /[a-z]/.test(parts[0])) {
+    const m = MONTHS[parts[0].slice(0, 4) as keyof typeof MONTHS] ?? MONTHS[parts[0]];
+    if (m) {
+      const yy = parts[1];
+      const year = /^\d{2}$/.test(yy) ? 2000 + Number(yy) : Number(yy);
+      if (year >= 1900 && year <= 2100) return lastDayOfMonth(year, m);
+    }
+  }
+
+  // Numeric month patterns: MM-YY or MM YYYY
+  if (parts.length === 2 && /^\d{1,2}$/.test(parts[0]) && /^\d{2,4}$/.test(parts[1])) {
+    const m = Number(parts[0]);
+    const year = /^\d{2}$/.test(parts[1]) ? 2000 + Number(parts[1]) : Number(parts[1]);
+    if (m >= 1 && m <= 12 && year >= 1900 && year <= 2100) return lastDayOfMonth(year, m);
+  }
+
   return undefined;
 };
 
@@ -427,15 +514,42 @@ const mapIssueToParsed = (issue: Issue, rowIndex: number): ParsedRowError => {
   return { row: rowIndex, field: fieldPath, code: issue.code, message: issue.msg };
 };
 
+/**
+ * Sanitize and validate a canonical row with schema-aware rules and mode controls.
+ *
+ * Parameters:
+ * - `raw`: partial `CanonicalProduct` prior to strict normalization.
+ * - `rowIndex`: 1-based Excel/CSV row index for error reporting.
+ * - `schema`: `SourceSchema` used to adjust requiredness (best-effort for `concat_items`).
+ * - `validationMode`: `full` | `errorsOnly` | `none` to control error verbosity/perf.
+ *
+ * Behavior:
+ * - Builds `pkg.pieces_per_unit` from `pieces_per_unit` and retains `identity` codes.
+ * - For `concat_items` with no dose signal (no strength), only `generic_name` is required.
+ * - Suppresses category digit/units warnings under `concat_items` (POS IDs common).
+ * - Filters warnings in `errorsOnly`; suppresses all errors in `none`.
+ *
+ * Returns:
+ * - `{ row, errors }` where `row` is `CanonicalProduct | null` if unrecoverable,
+ *   and `errors` are `ParsedRowError[]` respecting `validationMode`.
+ * Signed: EyosiyasJ
+ */
 export function sanitizeCanonicalRow(
   raw: Partial<CanonicalProduct>,
-  rowIndex: number
+  rowIndex: number,
+  schema?: SourceSchema,
+  validationMode: "full" | "errorsOnly" | "none" = "full"
 ): { row: CanonicalProduct | null; errors: ParsedRowError[] } {
   const flat: CanonicalRowInput = {
     generic_name: raw.product?.generic_name,
+    brand_name: raw.product?.brand_name,
     strength: raw.product?.strength,
     form: raw.product?.form,
     category: raw.product?.category ?? undefined,
+    requires_prescription: raw.product?.requires_prescription,
+    is_controlled: raw.product?.is_controlled,
+    storage_conditions: raw.product?.storage_conditions,
+    description: raw.product?.description,
     batch_no: raw.batch?.batch_no,
     expiry_date: raw.batch?.expiry_date,
     on_hand: raw.batch?.on_hand,
@@ -445,26 +559,77 @@ export function sanitizeCanonicalRow(
     pkg: raw.identity?.pkg,
     coo: raw.batch?.coo ?? raw.identity?.coo,
     sku: raw.identity?.sku,
+    purchase_unit: raw.identity?.purchase_unit,
+    pieces_per_unit: raw.pkg?.pieces_per_unit,
+    unit: raw.identity?.unit,
   };
 
   const { row, issues } = sanitizeRow(flat);
-  const errors = issues.map((i) => mapIssueToParsed(i, rowIndex));
+  const filteredIssues = (() => {
+    if (schema === "concat_items") {
+      return issues.filter((i) => !(i.field === "category" && i.code === "E_TEXT_DIGITS_SUSPECT"));
+    }
+    return issues;
+  })();
+  const baseIssues = validationMode === "errorsOnly" ? filteredIssues.filter((i) => i.level === "error") : filteredIssues;
+  const errors = validationMode === "none" ? [] : baseIssues.map((i) => mapIssueToParsed(i, rowIndex));
 
   if (!row) return { row: null, errors };
 
   const hasGeneric = Boolean(row.generic_name && row.generic_name.trim());
   const hasBrand = Boolean(row.brand_name && String(row.brand_name).trim());
-  if (!hasGeneric && !hasBrand) {
-    return { row: null, errors };
+  if (validationMode !== "none" && !hasGeneric && !hasBrand) {
+    errors.push({ row: rowIndex, field: "product.generic_name", code: "E_PRODUCT_NAME_REQUIRED", message: "Product name required" });
+  }
+
+  const emptyish = (v: unknown): boolean => {
+    const s = String(v ?? "").trim().toLowerCase();
+    return !s || s === "n/a" || s === "na" || s === "-" || s === "none" || s === "null";
+  };
+  const doseSignalPresent = Boolean(row.strength && String(row.strength).trim());
+  const relaxed = schema === "concat_items" && !doseSignalPresent;
+  if (validationMode !== "none" && emptyish(row.generic_name)) {
+    errors.push({ row: rowIndex, field: "product.generic_name", code: "E_REQUIRED_GENERIC_NAME", message: "generic_name required" });
+  }
+  if (validationMode !== "none" && !relaxed) {
+    if (emptyish(row.strength)) {
+      errors.push({ row: rowIndex, field: "product.strength", code: "E_REQUIRED_STRENGTH", message: "strength required" });
+    }
+    if (emptyish(row.form)) {
+      errors.push({ row: rowIndex, field: "product.form", code: "E_REQUIRED_FORM", message: "form required" });
+    }
+    if (emptyish(row.category)) {
+      errors.push({ row: rowIndex, field: "product.category", code: "E_REQUIRED_CATEGORY", message: "category required" });
+    }
   }
 
   const expiryIso = parseDateFlexible(row.expiry_date);
-  if (expiryIso) {
-    if (!isFutureDate(expiryIso)) {
-      errors.push({ row: rowIndex, field: "batch.expiry_date", code: "expired", message: "Expiry date must be in the future" });
+  if (validationMode !== "none" && !relaxed) {
+    if (emptyish(row.expiry_date)) {
+      errors.push({ row: rowIndex, field: "batch.expiry_date", code: "E_REQUIRED_EXPIRY", message: "expiry_date required" });
     }
-  } else if (row.expiry_date) {
-    errors.push({ row: rowIndex, field: "batch.expiry_date", code: "invalid_format", message: "Cannot parse expiry date" });
+  }
+  if (validationMode !== "none") {
+    if (expiryIso) {
+      if (!isFutureDate(expiryIso)) {
+        errors.push({ row: rowIndex, field: "batch.expiry_date", code: "expired", message: "Expiry date must be in the future" });
+      }
+    } else if (row.expiry_date) {
+      errors.push({ row: rowIndex, field: "batch.expiry_date", code: "invalid_format", message: "Cannot parse expiry date" });
+    }
+  }
+
+  const hasPack = Boolean(row.pkg) || (typeof row.pieces_per_unit === "number" && !Number.isNaN(row.pieces_per_unit)) || (typeof row.pieces_per_unit === "string" && !emptyish(row.pieces_per_unit));
+  if (validationMode !== "none" && !relaxed) {
+    if (!hasPack) {
+      errors.push({ row: rowIndex, field: "pkg.pieces_per_unit", code: "E_REQUIRED_PACK_CONTENTS", message: "pack contents required" });
+    }
+    if (emptyish(row.coo)) {
+      errors.push({ row: rowIndex, field: "identity.coo", code: "E_REQUIRED_COO", message: "country of origin required" });
+    }
+    if (row.on_hand === undefined || row.on_hand === null || Number.isNaN(Number(row.on_hand))) {
+      errors.push({ row: rowIndex, field: "batch.on_hand", code: "E_REQUIRED_QUANTITY", message: "quantity required" });
+    }
   }
 
   // Do not hard-drop on stock/identity errors; apps decide readiness.
@@ -473,9 +638,14 @@ export function sanitizeCanonicalRow(
     product: {
       generic_name: row.generic_name ?? "",
       brand_name: (row.brand_name ?? null) ?? null,
+      manufacturer_name: (row.manufacturer_name ?? null) ?? null,
       strength: row.strength ?? "",
       form: row.form ?? "",
       category: row.category ?? null,
+      requires_prescription: typeof row.requires_prescription === "boolean" ? row.requires_prescription : null,
+      is_controlled: typeof row.is_controlled === "boolean" ? row.is_controlled : null,
+      storage_conditions: row.storage_conditions ?? null,
+      description: row.description ?? null,
     },
     batch: {
       batch_no: row.batch_no ?? "",
@@ -494,7 +664,38 @@ export function sanitizeCanonicalRow(
       pkg: row.pkg ?? null,
       coo: row.coo ?? null,
       sku: row.sku ?? null,
+      purchase_unit: row.purchase_unit ?? null,
+      unit: row.unit ?? null,
     };
+  }
+
+  // Build packaging namespace for pack contents
+  const parsedPiecesPerUnit = (() => {
+    const v = row.pieces_per_unit;
+    if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
+    if (typeof v === "string") {
+      const s = v.replace(/,/g, "").trim();
+      const n = Number(s);
+      if (Number.isFinite(n)) return n;
+    }
+    return undefined;
+  })();
+  if (parsedPiecesPerUnit !== undefined) {
+    canonical.pkg = { pieces_per_unit: parsedPiecesPerUnit };
+  }
+
+  // Derive umbrella category: prefer 3-letter code when present, else use text classification
+  const umbrellaFromCode = mapCategoryCodeToUmbrella(row.cat);
+  const umbrella =
+    umbrellaFromCode ??
+    classifyUmbrellaCategory({
+      generic_name: canonical.product.generic_name,
+      brand_name: canonical.product.brand_name ?? undefined,
+      category: canonical.product.category ?? undefined,
+      description: canonical.product.description ?? undefined,
+    });
+  if (umbrella) {
+    canonical.product.umbrella_category = umbrella;
   }
 
   return { row: canonical, errors };

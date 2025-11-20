@@ -1,4 +1,15 @@
-import type { CanonicalProduct, ParsedRowError } from "./types.js";
+import type { CanonicalProduct, ParsedRowError, SourceSchema } from "./types.js";
+/**
+ * Module: Field Sanitizers & Row Validation
+ * Purpose: Normalize and validate loosely-typed product fields into canonical shapes.
+ * Features:
+ * - Fuzzy form normalization with autocorrect and hygiene warnings (no digits rule).
+ * - Strength normalization supporting ratios and percent formats.
+ * - Flexible GTIN, batch, number, and date parsers with bounds and warnings.
+ * - Schema-aware row validation (best-effort for `concat_items` when no dose signal).
+ * - Validation modes: `full`, `errorsOnly`, `none`.
+ * Signed: EyosiyasJ
+ */
 export type IssueLevel = "error" | "warn";
 export type Issue = {
     field: string;
@@ -11,6 +22,7 @@ export interface CanonicalRowInput {
     strength?: unknown;
     form?: unknown;
     brand_name?: unknown;
+    manufacturer_name?: unknown;
     gtin?: unknown;
     category?: unknown;
     requires_prescription?: unknown;
@@ -36,6 +48,7 @@ export interface SanitizedRow {
     strength?: string;
     form?: FormEnum;
     brand_name?: string;
+    manufacturer_name?: string;
     gtin?: string;
     category?: string;
     requires_prescription?: boolean;
@@ -56,8 +69,13 @@ export interface SanitizedRow {
     coo?: string;
     sku?: string;
 }
-declare const FORM_ENUM: readonly ["tablet", "capsule", "syrup", "injection", "cream", "ointment", "drops", "inhaler", "other"];
+declare const FORM_ENUM: readonly ["tablet", "capsule", "syrup", "injection", "cream", "ointment", "drops", "inhaler", "suspension", "solution", "gel", "spray", "lotion", "patch", "powder", "other"];
 type FormEnum = (typeof FORM_ENUM)[number];
+/**
+ * Normalize free-text dosage form to canonical enum with fuzzy match and hygiene checks.
+ * Enforces no-digits rule (warn) and autocorrects close variants; errors on unknowns.
+ * Signed: EyosiyasJ
+ */
 export declare function sanitizeForm(v: unknown): {
     value?: FormEnum;
     issues: Issue[];
@@ -114,7 +132,27 @@ export declare function sanitizeRow(input: CanonicalRowInput): {
     row: SanitizedRow;
     issues: Issue[];
 };
-export declare function sanitizeCanonicalRow(raw: Partial<CanonicalProduct>, rowIndex: number): {
+/**
+ * Sanitize and validate a canonical row with schema-aware rules and mode controls.
+ *
+ * Parameters:
+ * - `raw`: partial `CanonicalProduct` prior to strict normalization.
+ * - `rowIndex`: 1-based Excel/CSV row index for error reporting.
+ * - `schema`: `SourceSchema` used to adjust requiredness (best-effort for `concat_items`).
+ * - `validationMode`: `full` | `errorsOnly` | `none` to control error verbosity/perf.
+ *
+ * Behavior:
+ * - Builds `pkg.pieces_per_unit` from `pieces_per_unit` and retains `identity` codes.
+ * - For `concat_items` with no dose signal (no strength), only `generic_name` is required.
+ * - Suppresses category digit/units warnings under `concat_items` (POS IDs common).
+ * - Filters warnings in `errorsOnly`; suppresses all errors in `none`.
+ *
+ * Returns:
+ * - `{ row, errors }` where `row` is `CanonicalProduct | null` if unrecoverable,
+ *   and `errors` are `ParsedRowError[]` respecting `validationMode`.
+ * Signed: EyosiyasJ
+ */
+export declare function sanitizeCanonicalRow(raw: Partial<CanonicalProduct>, rowIndex: number, schema?: SourceSchema, validationMode?: "full" | "errorsOnly" | "none"): {
     row: CanonicalProduct | null;
     errors: ParsedRowError[];
 };

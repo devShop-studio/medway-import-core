@@ -1,3 +1,9 @@
+/**
+ * Module: Header Semantics & Mapping
+ * Purpose: Provide synonyms, type compatibility, and scoring to map raw headers
+ * to canonical keys with confidence for generic CSVs and headerless detection.
+ * Signed: EyosiyasJ
+ */
 export type CanonicalKey =
   | "generic_name"
   | "brand_name"
@@ -12,7 +18,14 @@ export type CanonicalKey =
   | "coo"
   | "sku"
   | "manufacturer"
-  | "notes";
+  | "notes"
+  | "requires_prescription"
+  | "is_controlled"
+  | "storage_conditions"
+  | "purchase_unit"
+  | "pieces_per_unit"
+  | "unit"
+  | "reserved";
 
 interface CanonicalDef {
   key: CanonicalKey;
@@ -22,13 +35,13 @@ interface CanonicalDef {
 }
 
 const defs: CanonicalDef[] = [
-  { key: "generic_name", type: "text", synonyms: ["generic", "generic name", "international name", "inn", "active ingredient", "api name", "drug name", "product name"], negative: ["brand"] },
+  { key: "generic_name", type: "text", synonyms: ["generic", "generic name", "international name", "inn", "active ingredient", "api name", "drug name", "product name", "generic international name"], negative: ["brand"] },
   { key: "brand_name", type: "text", synonyms: ["brand", "brand name", "trade name", "commercial name"], negative: ["generic"] },
   { key: "strength", type: "text", synonyms: ["strength", "dose", "dosage", "concentration", "potency"] },
   { key: "form", type: "text", synonyms: ["dosage form", "form", "formulation", "presentation", "product form", "type"] },
   { key: "category", type: "text", synonyms: ["category", "product category", "therapeutic class", "class", "group"] },
   { key: "expiry_date", type: "date", synonyms: ["expiry", "expiry date", "exp date", "expiration", "use by", "best before"] },
-  { key: "batch_no", type: "text", synonyms: ["batch", "batch no", "batch number", "lot", "lot no", "lot number", "batch/lot"] },
+  { key: "batch_no", type: "text", synonyms: ["batch", "batch no", "batch number", "lot", "lot no", "lot number", "batch/lot", "batch lot number"] },
   { key: "pack_contents", type: "text", synonyms: ["pack contents", "pack size", "pack", "units per pack", "tablets per strip", "volume per bottle"] },
   { key: "on_hand", type: "number", synonyms: ["quantity", "qty", "stock", "on hand", "available", "item quantity", "count"] },
   { key: "unit_price", type: "number", synonyms: ["unit price", "price", "cost", "buy price", "purchase price", "selling price", "sale price"] },
@@ -36,6 +49,13 @@ const defs: CanonicalDef[] = [
   { key: "sku", type: "text", synonyms: ["serial number", "serial", "s/n", "code", "barcode", "gtin", "ean", "product code", "uid", "serial no"] },
   { key: "manufacturer", type: "text", synonyms: ["manufacturer", "mfr", "company", "company name", "supplier", "producer"] },
   { key: "notes", type: "text", synonyms: ["notes", "comments", "remarks", "description", "details"] },
+  { key: "requires_prescription", type: "text", synonyms: ["requires prescription", "prescription", "rx", "needs prescription" ] },
+  { key: "is_controlled", type: "text", synonyms: ["controlled", "is controlled", "controlled substance", "cs"] },
+  { key: "storage_conditions", type: "text", synonyms: ["storage conditions", "storage", "store", "keep", "handling"] },
+  { key: "purchase_unit", type: "text", synonyms: ["purchase unit", "buy unit", "pack", "box", "carton"] },
+  { key: "pieces_per_unit", type: "number", synonyms: ["pieces per unit", "pieces", "units per pack", "units per box"] },
+  { key: "unit", type: "text", synonyms: ["unit", "measure", "uom", "unit of measure"] },
+  { key: "reserved", type: "number", synonyms: ["reserved", "hold", "on reserve"] },
 ];
 
 const strongTokens = new Set(["batch", "lot", "expiry", "expiration", "country", "price", "quantity", "qty", "stock", "form", "strength"]);
@@ -105,7 +125,15 @@ export interface HeaderMappingHint {
 }
 
 /**
- * Suggest canonical mappings for headers with confidence scores
+ * Suggest canonical mappings for headers with confidence scores.
+ *
+ * Parameters:
+ * - `headers`: raw header labels from the file.
+ * - `sampleRows`: small sample of row objects to evaluate type compatibility.
+ *
+ * Returns: `HeaderMappingHint[]` with `{ header, key?, confidence }` used by detection
+ * and debugging in CLI/UI. Confidence combines token overlap and value-type checks.
+ * Signed: EyosiyasJ
  */
 export function suggestHeaderMappings(headers: string[], sampleRows: Array<Record<string, unknown>>): HeaderMappingHint[] {
   const hints: HeaderMappingHint[] = [];
