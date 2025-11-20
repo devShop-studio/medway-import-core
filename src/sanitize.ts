@@ -1,5 +1,5 @@
 import type { CanonicalProduct, ParsedRowError, SourceSchema } from "./types.js";
-import { classifyUmbrellaCategory, mapCategoryCodeToUmbrella } from "./category.js";
+import { classifyUmbrellaCategory, mapCategoryCodeToUmbrella, UMBRELLA_CATEGORY_INDEX } from "./category.js";
 import { normalizeCountryToIso2 } from "./country.js";
 
 /**
@@ -150,6 +150,9 @@ export function sanitizeForm(v: unknown): { value?: FormEnum; issues: Issue[]; s
   const issues: Issue[] = [];
   const raw = asciiLower(v);
   if (!raw) return { issues: [{ field: "form", code: "E_FORM_MISSING", msg: "form required", level: "error" }] };
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    return { issues: [{ field: "form", code: "E_FORM_NUMERIC", msg: "form cannot be numeric", level: "error" }] };
+  }
   if (hasDigit(raw) || hasUnitToken(raw)) {
     issues.push({ field: "form", code: "E_TEXT_DIGITS_SUSPECT", msg: "form must not contain digits/units", level: "warn" });
   }
@@ -223,6 +226,13 @@ export function sanitizeBatchNo(v: unknown): { value?: string; issues: Issue[] }
   if (s.length > 20) {
     s = s.slice(0, 20);
     issues.push({ field: "batch_no", code: "W_BATCH_TRUNCATED", msg: "trimmed to max 20 chars", level: "warn" });
+  }
+  if (s) {
+    const hasAlpha = /[A-Z]/.test(s);
+    const hasDigitAny = /\d/.test(s);
+    if (!(hasAlpha && hasDigitAny)) {
+      issues.push({ field: "batch_no", code: "E_BATCH_ALPHA_NUM_MIX", msg: "batch_no must contain letters and digits", level: "error" });
+    }
   }
   return { value: s, issues };
 }
@@ -339,6 +349,10 @@ export function sanitizeRow(input: CanonicalRowInput): { row: SanitizedRow; issu
   issues.push(...gt.issues);
 
   out.category = collapseWS(String(input.category ?? "")).trim() || undefined;
+  if (out.category && /^\d+(?:\.\d+)?$/.test(out.category)) {
+    issues.push({ field: "category", code: "E_CATEGORY_NUMERIC", msg: "category cannot be numeric", level: "error" });
+    out.category = undefined;
+  }
   if (out.category && (hasDigit(out.category) || hasUnitToken(out.category))) {
     issues.push({ field: "category", code: "E_TEXT_DIGITS_SUSPECT", msg: "category must not contain digits/units", level: "warn" });
   }
@@ -394,10 +408,14 @@ export function sanitizeRow(input: CanonicalRowInput): { row: SanitizedRow; issu
     if (cooRaw && hasDigit(cooRaw)) {
       issues.push({ field: "coo", code: "E_TEXT_DIGITS_SUSPECT", msg: "country must not contain digits", level: "warn" });
     }
-    const iso2 = normalizeCountryToIso2(String(input.coo)) || String(input.coo);
-    const cc = sanitizeCountryCode(iso2);
-    if (cc.value !== undefined) out.coo = cc.value;
-    issues.push(...cc.issues);
+    if (/^\d+(?:\.\d+)?$/.test(cooRaw)) {
+      issues.push({ field: "coo", code: "E_COO_NUMERIC", msg: "country cannot be numeric", level: "error" });
+    } else {
+      const iso2 = normalizeCountryToIso2(String(input.coo)) || String(input.coo);
+      const cc = sanitizeCountryCode(iso2);
+      if (cc.value !== undefined) out.coo = cc.value;
+      issues.push(...cc.issues);
+    }
   }
 
   const sku = collapseWS(String(input.sku ?? "")).trim();
@@ -696,7 +714,33 @@ export function sanitizeCanonicalRow(
     });
   if (umbrella) {
     canonical.product.umbrella_category = umbrella;
+    if (umbrellaFromCode) {
+      const rule = UMBRELLA_CATEGORY_INDEX[umbrella];
+      if (rule && rule.label) {
+        canonical.product.category = rule.label;
+      }
+    }
+  } else {
+    const hasCategorySignal = Boolean((row.category ?? "").trim()) || Boolean((row.cat ?? "").trim());
+    if (hasCategorySignal) {
+      if (!canonical.product.category || !String(canonical.product.category).trim()) {
+        canonical.product.category = "NA";
+      }
+    }
   }
+
+  // Universal NA fallback for empty text fields
+  const textNA = (v: unknown) => {
+    const s = String(v ?? "").trim();
+    return s ? s : "NA";
+  };
+  canonical.product.brand_name = textNA(canonical.product.brand_name ?? "");
+  canonical.product.manufacturer_name = textNA(canonical.product.manufacturer_name ?? "");
+  canonical.product.form = textNA(canonical.product.form ?? "");
+  canonical.product.category = textNA(canonical.product.category ?? "");
+  canonical.product.storage_conditions = textNA(canonical.product.storage_conditions ?? "");
+  canonical.product.description = textNA(canonical.product.description ?? "");
+  canonical.batch.batch_no = textNA(canonical.batch.batch_no ?? "");
 
   return { row: canonical, errors };
 }

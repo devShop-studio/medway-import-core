@@ -7,7 +7,7 @@ Lightweight, browser/RN-safe core for parsing MedWay stock import files (XLSX an
 Using a git tag:
 
 ```
-"@medway/import-core": "git+ssh://git@github.com/devShop-studio/medway-import-core.git#v0.1.0"
+"@medway/import-core": "git+ssh://git@github.com/devShop-studio/medway-import-core.git#v0.1.1"
 ```
 
 Build locally:
@@ -247,6 +247,26 @@ Thresholds
 
 - `parseProductsFileFromBuffer(bytes, name, options?)`
   - Detects schema (`template_v3 | concat_items | csv_generic | unknown`), headers vs headerless, and concatenation mode.
+
+### 2025-11-20 – Category & Field Guardrails (EyosiyasJ)
+- Umbrella category: when a category signal exists (`product.category` or `identity.cat`) but cannot be mapped to one of the 23 umbrella categories, the parser now sets `product.category = "NA"` and does not attach an error. This replaces the previous `E_UMBRELLA_NOT_FOUND` emission.
+- Numeric exclusion:
+  - `product.form`: rejects purely numeric values with `E_FORM_NUMERIC`.
+  - `product.category`: rejects purely numeric values with `E_CATEGORY_NUMERIC`.
+  - `identity.coo`/`batch.coo`: flags purely numeric values with `E_COO_NUMERIC`; ISO‑2 validation still applies.
+- Batch rule: `batch.batch_no` must contain both letters and digits; otherwise `E_BATCH_ALPHA_NUM_MIX` is returned. Cleaning and truncation still apply.
+- Parser routing: leftover text from columns mapped as `product.category` no longer populates `product.generic_name`. Category and form remain isolated and are not linked to other name fields.
+- Follows existing patterns: validations live in `src/sanitize.ts`, parser routing in `src/parseProductsCore.ts`, umbrella logic in `src/category.ts`.
+
+### 2025-11-20 – 3‑Letter Code → Full Umbrella Label (EyosiyasJ)
+- When `identity.cat` contains a valid 3‑letter therapeutic code, the engine now maps it to an umbrella ID and sets `product.category` to the umbrella’s human‑readable label (e.g., `CVS` → `Cardiovascular (CVS)`). `product.umbrella_category` continues to hold the umbrella ID.
+- Reference: `src/sanitize.ts` (label assignment via `UMBRELLA_CATEGORY_INDEX`).
+
+### 2025-11-20 – Universal NA Fallback for Empty Text Fields (EyosiyasJ)
+- For empty text fields, the canonical output now uses `"NA"` instead of returning empty strings or implicit “other”. Applied to:
+  - `product.brand_name`, `product.manufacturer_name`, `product.form`, `product.category`, `product.storage_conditions`, `product.description`, and `batch.batch_no`.
+- Required‑field validations remain unchanged and still error when missing; `NA` is applied after validation so UI can display placeholders without masking errors.
+
 
 ### 2025-11-20 – Test Fixtures, Bench, and Packaging Smoke (EyosiyasJ)
 - Added fixture generator `tests/generate-fixtures.mjs` producing:

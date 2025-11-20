@@ -1,4 +1,4 @@
-import { classifyUmbrellaCategory, mapCategoryCodeToUmbrella } from "./category.js";
+import { classifyUmbrellaCategory, mapCategoryCodeToUmbrella, UMBRELLA_CATEGORY_INDEX } from "./category.js";
 import { normalizeCountryToIso2 } from "./country.js";
 const FORM_ENUM = ["tablet", "capsule", "syrup", "injection", "cream", "ointment", "drops", "inhaler", "suspension", "solution", "gel", "spray", "lotion", "patch", "powder", "other"];
 const FORM_SYNONYMS = {
@@ -74,6 +74,9 @@ export function sanitizeForm(v) {
     const raw = asciiLower(v);
     if (!raw)
         return { issues: [{ field: "form", code: "E_FORM_MISSING", msg: "form required", level: "error" }] };
+    if (/^\d+(?:\.\d+)?$/.test(raw)) {
+        return { issues: [{ field: "form", code: "E_FORM_NUMERIC", msg: "form cannot be numeric", level: "error" }] };
+    }
     if (hasDigit(raw) || hasUnitToken(raw)) {
         issues.push({ field: "form", code: "E_TEXT_DIGITS_SUSPECT", msg: "form must not contain digits/units", level: "warn" });
     }
@@ -153,6 +156,13 @@ export function sanitizeBatchNo(v) {
     if (s.length > 20) {
         s = s.slice(0, 20);
         issues.push({ field: "batch_no", code: "W_BATCH_TRUNCATED", msg: "trimmed to max 20 chars", level: "warn" });
+    }
+    if (s) {
+        const hasAlpha = /[A-Z]/.test(s);
+        const hasDigitAny = /\d/.test(s);
+        if (!(hasAlpha && hasDigitAny)) {
+            issues.push({ field: "batch_no", code: "E_BATCH_ALPHA_NUM_MIX", msg: "batch_no must contain letters and digits", level: "error" });
+        }
     }
     return { value: s, issues };
 }
@@ -272,6 +282,10 @@ export function sanitizeRow(input) {
         out.gtin = gt.value;
     issues.push(...gt.issues);
     out.category = collapseWS(String((_d = input.category) !== null && _d !== void 0 ? _d : "")).trim() || undefined;
+    if (out.category && /^\d+(?:\.\d+)?$/.test(out.category)) {
+        issues.push({ field: "category", code: "E_CATEGORY_NUMERIC", msg: "category cannot be numeric", level: "error" });
+        out.category = undefined;
+    }
     if (out.category && (hasDigit(out.category) || hasUnitToken(out.category))) {
         issues.push({ field: "category", code: "E_TEXT_DIGITS_SUSPECT", msg: "category must not contain digits/units", level: "warn" });
     }
@@ -324,11 +338,16 @@ export function sanitizeRow(input) {
         if (cooRaw && hasDigit(cooRaw)) {
             issues.push({ field: "coo", code: "E_TEXT_DIGITS_SUSPECT", msg: "country must not contain digits", level: "warn" });
         }
-        const iso2 = normalizeCountryToIso2(String(input.coo)) || String(input.coo);
-        const cc = sanitizeCountryCode(iso2);
-        if (cc.value !== undefined)
-            out.coo = cc.value;
-        issues.push(...cc.issues);
+        if (/^\d+(?:\.\d+)?$/.test(cooRaw)) {
+            issues.push({ field: "coo", code: "E_COO_NUMERIC", msg: "country cannot be numeric", level: "error" });
+        }
+        else {
+            const iso2 = normalizeCountryToIso2(String(input.coo)) || String(input.coo);
+            const cc = sanitizeCountryCode(iso2);
+            if (cc.value !== undefined)
+                out.coo = cc.value;
+            issues.push(...cc.issues);
+        }
     }
     const sku = collapseWS(String((_p = input.sku) !== null && _p !== void 0 ? _p : "")).trim();
     if (sku)
@@ -464,7 +483,7 @@ const mapIssueToParsed = (issue, rowIndex) => {
  * Signed: EyosiyasJ
  */
 export function sanitizeCanonicalRow(raw, rowIndex, schema, validationMode = "full") {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, _17, _18, _19, _20, _21, _22, _23;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, _17, _18, _19, _20, _21, _22, _23, _24, _25, _26, _27, _28, _29, _30, _31, _32;
     const flat = {
         generic_name: (_a = raw.product) === null || _a === void 0 ? void 0 : _a.generic_name,
         brand_name: (_b = raw.product) === null || _b === void 0 ? void 0 : _b.brand_name,
@@ -612,6 +631,32 @@ export function sanitizeCanonicalRow(raw, rowIndex, schema, validationMode = "fu
     });
     if (umbrella) {
         canonical.product.umbrella_category = umbrella;
+        if (umbrellaFromCode) {
+            const rule = UMBRELLA_CATEGORY_INDEX[umbrella];
+            if (rule && rule.label) {
+                canonical.product.category = rule.label;
+            }
+        }
     }
+    else {
+        const hasCategorySignal = Boolean(((_24 = row.category) !== null && _24 !== void 0 ? _24 : "").trim()) || Boolean(((_25 = row.cat) !== null && _25 !== void 0 ? _25 : "").trim());
+        if (hasCategorySignal) {
+            if (!canonical.product.category || !String(canonical.product.category).trim()) {
+                canonical.product.category = "NA";
+            }
+        }
+    }
+    // Universal NA fallback for empty text fields
+    const textNA = (v) => {
+        const s = String(v !== null && v !== void 0 ? v : "").trim();
+        return s ? s : "NA";
+    };
+    canonical.product.brand_name = textNA((_26 = canonical.product.brand_name) !== null && _26 !== void 0 ? _26 : "");
+    canonical.product.manufacturer_name = textNA((_27 = canonical.product.manufacturer_name) !== null && _27 !== void 0 ? _27 : "");
+    canonical.product.form = textNA((_28 = canonical.product.form) !== null && _28 !== void 0 ? _28 : "");
+    canonical.product.category = textNA((_29 = canonical.product.category) !== null && _29 !== void 0 ? _29 : "");
+    canonical.product.storage_conditions = textNA((_30 = canonical.product.storage_conditions) !== null && _30 !== void 0 ? _30 : "");
+    canonical.product.description = textNA((_31 = canonical.product.description) !== null && _31 !== void 0 ? _31 : "");
+    canonical.batch.batch_no = textNA((_32 = canonical.batch.batch_no) !== null && _32 !== void 0 ? _32 : "");
     return { row: canonical, errors };
 }

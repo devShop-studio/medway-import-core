@@ -469,9 +469,6 @@ function assignLeftoverText(
       if (!current || !String(current).trim() || shouldReplace) {
         prod.category = text;
       }
-      if (!prod.generic_name || !String(prod.generic_name).trim()) {
-        prod.generic_name = text;
-      }
       return;
     }
     case "product.generic_name":
