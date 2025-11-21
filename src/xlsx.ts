@@ -37,6 +37,32 @@ export async function readXlsxToRows(
 }
 
 /**
+ * readTabularAoA
+ * Reads workbook-like or tabular payload (XLS/XLSX/XLSB/ODS/HTML/CSV/TSV) from `ArrayBuffer`
+ * using SheetJS and returns the first sheet as array-of-arrays for header detection.
+ * Signed: EyosiyasJ
+ */
+export async function readTabularAoA(
+  fileBytes: ArrayBuffer
+): Promise<{
+  rows: string[][];
+  headerMeta?: { templateVersion?: string; headerChecksum?: string };
+}> {
+  const data = new Uint8Array(fileBytes);
+  const workbook = XLSX.read(data, { type: "array" });
+  const sheetNames = workbook.SheetNames;
+  const mainSheetName = chooseMainSheet(sheetNames);
+  const sheet = workbook.Sheets[mainSheetName];
+  const aoa = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: null });
+  const rows: string[][] = (aoa as any[]).map((r) => {
+    const arr = Array.isArray(r) ? r : [r];
+    return arr.map((v) => (v === null || v === undefined ? "" : String(v)));
+  });
+  const meta = extractMetaFromWorkbook(workbook);
+  return { rows, headerMeta: meta };
+}
+
+/**
  * Select the primary sheet to parse. Prefers a sheet named `Products` otherwise falls back to the first sheet.
  * Signed: EyosiyasJ
  */

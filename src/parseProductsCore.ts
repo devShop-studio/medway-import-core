@@ -25,6 +25,7 @@ interface ParseProductsCoreInput {
     headerChecksum?: string;
   };
   options?: ParseOptions;
+  origin?: "workbook" | "text";
 }
 
 /**
@@ -66,7 +67,7 @@ export function parseProductsCore(
   const sampleSize = computeSampleSize(rows.length, mode);
   const sampleRows = rows.slice(0, sampleSize);
 
-  const sourceSchema: SourceSchema = detectSourceSchema(rows, headerMeta);
+  const sourceSchema: SourceSchema = detectSourceSchema(rows, headerMeta, input.origin);
 
   // Headerless detection via synthetic column keys
   const firstKeys = Object.keys(rows[0] || {});

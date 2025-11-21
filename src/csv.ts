@@ -106,6 +106,59 @@ export function parseCsvRaw(csvText: string): string[][] {
   return rows;
 }
 
+/**
+ * parseDsvRaw
+ * Generalized delimiter-separated values parser with quote handling.
+ * Supports ',', ';', '\t', '|'. Returns array-of-arrays without headers.
+ * Signed: EyosiyasJ
+ */
+export function parseDsvRaw(text: string, delim: "," | ";" | "\t" | "|"): string[][] {
+  const rows: string[][] = [];
+  let current: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  const pushField = () => { current.push(field); field = ""; };
+  const pushRow = () => { rows.push(current); current = []; };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; }
+      } else { field += c; }
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === delim) pushField();
+      else if (c === "\n") { pushField(); pushRow(); }
+      else if (c === "\r") { /* ignore */ }
+      else field += c;
+    }
+  }
+  pushField();
+  pushRow();
+  if (rows.length && rows[rows.length - 1].every((v) => v === "")) rows.pop();
+  return rows;
+}
+
+/**
+ * detectDelimiterFromText
+ * Sniffs best delimiter among ',', ';', '\t', '|' based on column count stability.
+ * Signed: EyosiyasJ
+ */
+export function detectDelimiterFromText(text: string): "," | ";" | "\t" | "|" {
+  const cands: Array<"," | ";" | "\t" | "|"> = [",", ";", "\t", "|"];
+  let best: "," | ";" | "\t" | "|" = ",";
+  let bestScore = -1;
+  for (const d of cands) {
+    const rows = parseDsvRaw(text, d);
+    const counts = rows.slice(0, 25).map((r) => r.length);
+    const avg = counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : 0;
+    const varc = counts.length ? counts.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / counts.length : 0;
+    const score = avg - varc; // prefer many columns with low variance
+    if (score > bestScore) { bestScore = score; best = d; }
+  }
+  return best;
+}
+
 const looksDateLike = (s: string): boolean => {
   const t = s.trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(t) || /^\d{2}[\/-]\d{2}[\/-]\d{2,4}$/.test(t) || /^\d{3,5}$/.test(t);

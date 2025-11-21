@@ -9,6 +9,7 @@ interface ParseProductsCoreInput {
         headerChecksum?: string;
     };
     options?: ParseOptions;
+    origin?: "workbook" | "text";
 }
 /**
  * Module: Core Parsing Pipeline

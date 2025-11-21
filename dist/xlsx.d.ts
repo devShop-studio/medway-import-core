@@ -12,4 +12,17 @@ export declare function readXlsxToRows(fileBytes: ArrayBuffer): Promise<{
         headerChecksum?: string;
     };
 }>;
+/**
+ * readTabularAoA
+ * Reads workbook-like or tabular payload (XLS/XLSX/XLSB/ODS/HTML/CSV/TSV) from `ArrayBuffer`
+ * using SheetJS and returns the first sheet as array-of-arrays for header detection.
+ * Signed: EyosiyasJ
+ */
+export declare function readTabularAoA(fileBytes: ArrayBuffer): Promise<{
+    rows: string[][];
+    headerMeta?: {
+        templateVersion?: string;
+        headerChecksum?: string;
+    };
+}>;
 //# sourceMappingURL=xlsx.d.ts.map

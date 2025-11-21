@@ -36,7 +36,7 @@ type CanonicalFlat = {
 export declare function detectSourceSchema(rows: RawRow[], headerMeta?: {
     templateVersion?: string;
     headerChecksum?: string;
-}): SourceSchema;
+}, origin?: "workbook" | "text"): SourceSchema;
 /**
  * Map a single raw row to a partial `CanonicalProduct` based on detected schema.
  * Supports headerless assignments for CSV when provided.

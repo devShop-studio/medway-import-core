@@ -335,7 +335,8 @@ const looksLikeProductCsv = (headers: string[]): boolean => {
  */
 export function detectSourceSchema(
   rows: RawRow[],
-  headerMeta?: { templateVersion?: string; headerChecksum?: string }
+  headerMeta?: { templateVersion?: string; headerChecksum?: string },
+  origin?: "workbook" | "text"
 ): SourceSchema {
   if (
     headerMeta?.templateVersion === TEMPLATE_VERSION &&
@@ -347,7 +348,7 @@ export function detectSourceSchema(
   const headerRow = rows[0] || {};
   const headerKeys = Object.keys(headerRow);
   if (headerKeys.length && headerKeys.every((k) => /^col_\d+$/.test(k))) {
-    return "csv_generic";
+    return origin === "workbook" ? "unknown" : "csv_generic";
   }
 
   if (arraysEqualIgnoreOrder(headerKeys, LEGACY_ITEMS_HEADERS)) {

@@ -1,7 +1,9 @@
+import 'xlsx/dist/cpexcel.js';
 import { parseProductsCore } from "./parseProductsCore.js";
-import { parseCsvRaw, detectHeaderMode, buildRawRows } from "./csv.js";
+import { detectHeaderMode, buildRawRows } from "./csv.js";
+import { detectDelimiterFromText, parseDsvRaw } from "./csv.js";
 import { inferHeaderlessGuesses } from "./schema.js";
-import { readXlsxToRows } from "./xlsx.js";
+import { readTabularAoA } from "./xlsx.js";
 export { suggestHeaderMappings } from "./semantics.js";
 export * from "./types.js";
 export * from "./sanitize.js";
@@ -37,19 +39,48 @@ export { parseProductsCore };
  * - `requiredFields` in meta aligns UI contracts and is schema-aware for POS (`concat_items`).
  * Signed: EyosiyasJ
  */
+/**
+ * parseProductsFileFromBuffer
+ * Accepts `ArrayBuffer` and filename; parses any tabular format using a universal strategy:
+ * - First attempt SheetJS workbook reader (handles XLS/XLSX/XLSB/ODS/HTML/CSV/TSV)
+ * - If workbook parse yields rows, perform header detection and map via `buildRawRows`
+ * - Fallback: sniff delimiter and parse DSV text for generic CSV/TSV
+ * Signed: EyosiyasJ
+ */
 export async function parseProductsFileFromBuffer(fileBytes, filename, options) {
     const lower = filename.toLowerCase();
-    if (lower.endsWith(".xlsx")) {
-        const { rows, headerMeta } = await readXlsxToRows(fileBytes);
-        return parseProductsCore({ rows, headerMeta, filename, options });
+    // Try universal workbook/tabular reader first
+    try {
+        const { rows: aoa, headerMeta } = await readTabularAoA(fileBytes);
+        if (aoa && aoa.length) {
+            const headerMode = detectHeaderMode(aoa);
+            const rows = buildRawRows(aoa, headerMode === "none" ? "none" : "headers");
+            const res = parseProductsCore({ rows, headerMeta, filename, options, origin: "workbook" });
+            res.meta.headerMode = headerMode;
+            if (res.meta.headerMode === "none") {
+                const rawNone = buildRawRows(aoa, "none");
+                const { guesses } = inferHeaderlessGuesses(rawNone);
+                res.meta.columnGuesses = guesses.map((g) => ({
+                    index: g.index,
+                    candidates: g.candidates.map((c) => ({ field: mapCanonToPath(c.canon), confidence: c.score })),
+                    sampleValues: g.sample,
+                }));
+            }
+            return res;
+        }
     }
+    catch (e) {
+        // continue to text fallback
+    }
+    // Text fallback for generic delimited files
     const text = new TextDecoder("utf-8").decode(fileBytes);
-    const raw = parseCsvRaw(text);
+    const delim = detectDelimiterFromText(text);
+    const raw = parseDsvRaw(text, delim);
     const headerMode = detectHeaderMode(raw);
     const rowsHeaders = buildRawRows(raw, "headers");
     const rowsNone = buildRawRows(raw, "none");
-    const resHeaders = parseProductsCore({ rows: rowsHeaders, filename, options });
-    const resNone = parseProductsCore({ rows: rowsNone, filename, options });
+    const resHeaders = parseProductsCore({ rows: rowsHeaders, filename, options, origin: "text" });
+    const resNone = parseProductsCore({ rows: rowsNone, filename, options, origin: "text" });
     const pickNone = headerMode === "none" || (resHeaders.meta.parsedRows === 0 && resNone.meta.parsedRows > resHeaders.meta.parsedRows);
     const result = pickNone ? resNone : resHeaders;
     result.meta.headerMode = pickNone ? "none" : headerMode;

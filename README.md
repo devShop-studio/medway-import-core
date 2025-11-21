@@ -1,13 +1,13 @@
-# @medway/import-core
+# medway-import-core
 
 Lightweight, browser/RN-safe core for parsing MedWay stock import files (XLSX and CSV) and producing a canonical product payload with detailed row errors and metadata.
 
 ## Installation
 
-Using a git tag:
+Install from npm:
 
 ```
-"@medway/import-core": "git+ssh://git@github.com/devShop-studio/medway-import-core.git#v0.1.1"
+npm install medway-import-core
 ```
 
 Build locally:
@@ -31,7 +31,7 @@ Types are exported from `./types`.
 ## Usage: Web
 
 ```
-import { parseProductsFileFromBuffer } from "@medway/import-core";
+import { parseProductsFileFromBuffer } from "medway-import-core";
 
 async function handleFile(file: File) {
   const bytes = await file.arrayBuffer();
@@ -43,7 +43,7 @@ async function handleFile(file: File) {
 ## Usage: React Native / Expo
 
 ```
-import { parseProductsFileFromBuffer } from "@medway/import-core";
+import { parseProductsFileFromBuffer } from "medway-import-core";
 import * as DocumentPicker from "expo-document-picker";
 
 async function handleImport() {
@@ -247,6 +247,57 @@ Thresholds
 
 - `parseProductsFileFromBuffer(bytes, name, options?)`
   - Detects schema (`template_v3 | concat_items | csv_generic | unknown`), headers vs headerless, and concatenation mode.
+ 
+### 2025-11-21 – npm Publishing (EyosiyasJ)
+- Packaging readiness:
+  - Added `publishConfig.access = "public"` and `license: "MIT"` to `package.json`.
+  - Published as unscoped `medway-import-core` while the `@medway` org scope is not configured.
+  - `files` restricts the tarball to `dist/**/*` only.
+- How to publish:
+  - `npm login` (account with publish rights).
+  - `npm run build` to emit `dist` with `.d.ts`.
+  - `npm pack` to inspect the tarball locally.
+  - `npm publish` (no flags needed; `publishConfig.access` is set).
+- Notes:
+  - Tests: `npm test` should pass before publishing.
+  - Vulnerabilities: run `npm audit` and address if needed.
+
+### 2025-11-21 – Codepage Support for CSV/XLS (EyosiyasJ)
+- Added a side‑effect import in the package entry to enable non‑UTF encodings:
+  - `src/index.ts` now includes `import 'xlsx/dist/cpexcel.js'` so Windows‑1252/ISO‑8859‑1 CSVs and legacy `.xls` parse correctly.
+- Prevent bundlers from dropping the import by marking side effects:
+  - `package.json` sets `"sideEffects": ["xlsx/dist/cpexcel.js"]`.
+- Dependency alignment:
+  - Kept `xlsx` under `dependencies` and verified with build/tests.
+- Publish:
+  - Bumped package version to `0.1.2` and verified the tarball via `npm pack`.
+
+### 2025-11-21 – Universal Tabular Acceptance (EyosiyasJ)
+- Parser now accepts a broad set of tabular formats:
+  - Excel family: `.xls`, `.xlsx`, `.xlsb`, SpreadsheetML `.xml`, `.ods`
+  - Delimited text: `.csv` (comma/semicolon), `.tsv` (tab), pipe `|` DSV
+  - HTML tables (single table parsed as the first sheet)
+- Strategy:
+  - First try SheetJS to read any workbook/tabular payload from bytes.
+  - If a sheet is produced, convert to AoA and run header detection, preserving headerless behavior.
+  - Fallback: sniff delimiter among `, ; \t |` and parse with quote handling.
+- Notes:
+  - Non‑UTF encodings and legacy `.xls` are supported via `cpexcel` side‑effect import.
+  - Headerless files still expose `meta.columnGuesses` for UI alignment.
+ 
+Signed: EyosiyasJ
+
+### 2025-11-21 – Headerless Workbook Classification (EyosiyasJ)
+- Adjusted schema detection to treat headerless workbook inputs (synthetic `col_#` keys) as `unknown` when the origin is a workbook, not `csv_generic`.
+- Rationale: Headerless Excel POS dumps should not be forced into the generic CSV profile; this aligns tests and real-world behavior.
+- Implementation:
+  - `src/schema.ts:336–370` now accepts an `origin` hint (`"workbook" | "text"`) and returns `unknown` for headerless workbook.
+  - `src/parseProductsCore.ts:69–70` passes through the origin hint.
+  - `src/index.ts:66` and `src/index.ts:91–92` set origin appropriately for workbook vs text paths.
+- Tests: `npm test` now passes `testHeaderlessPosDetection` by returning a schema in the accepted set.
+- Version: bumped to `0.1.3`.
+ 
+Signed: EyosiyasJ
 
 ### 2025-11-20 – Category & Field Guardrails (EyosiyasJ)
 - Umbrella category: when a category signal exists (`product.category` or `identity.cat`) but cannot be mapped to one of the 23 umbrella categories, the parser now sets `product.category = "NA"` and does not attach an error. This replaces the previous `E_UMBRELLA_NOT_FOUND` emission.

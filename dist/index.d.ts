@@ -1,3 +1,4 @@
+import 'xlsx/dist/cpexcel.js';
 import { parseProductsCore } from "./parseProductsCore.js";
 export { suggestHeaderMappings } from "./semantics.js";
 import type { ParsedImportResult } from "./types.js";
@@ -34,6 +35,14 @@ export { parseProductsCore };
  * - `.xlsx`: parsed via `readXlsxToRows` and fed to `parseProductsCore`.
  * - `.csv`: raw rows parsed and evaluated for header vs headerless; both paths are attempted and the better result chosen.
  * - `requiredFields` in meta aligns UI contracts and is schema-aware for POS (`concat_items`).
+ * Signed: EyosiyasJ
+ */
+/**
+ * parseProductsFileFromBuffer
+ * Accepts `ArrayBuffer` and filename; parses any tabular format using a universal strategy:
+ * - First attempt SheetJS workbook reader (handles XLS/XLSX/XLSB/ODS/HTML/CSV/TSV)
+ * - If workbook parse yields rows, perform header detection and map via `buildRawRows`
+ * - Fallback: sniff delimiter and parse DSV text for generic CSV/TSV
  * Signed: EyosiyasJ
  */
 export declare function parseProductsFileFromBuffer(fileBytes: ArrayBuffer, filename: string, options?: ParseOptions): Promise<ParsedImportResult>;

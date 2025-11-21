@@ -280,7 +280,7 @@ const looksLikeProductCsv = (headers) => {
  * - `unknown`: unrecognized shape
  * Signed: EyosiyasJ
  */
-export function detectSourceSchema(rows, headerMeta) {
+export function detectSourceSchema(rows, headerMeta, origin) {
     if ((headerMeta === null || headerMeta === void 0 ? void 0 : headerMeta.templateVersion) === TEMPLATE_VERSION &&
         (headerMeta === null || headerMeta === void 0 ? void 0 : headerMeta.headerChecksum) === TEMPLATE_CHECKSUM) {
         return "template_v3";
@@ -288,7 +288,7 @@ export function detectSourceSchema(rows, headerMeta) {
     const headerRow = rows[0] || {};
     const headerKeys = Object.keys(headerRow);
     if (headerKeys.length && headerKeys.every((k) => /^col_\d+$/.test(k))) {
-        return "csv_generic";
+        return origin === "workbook" ? "unknown" : "csv_generic";
     }
     if (arraysEqualIgnoreOrder(headerKeys, LEGACY_ITEMS_HEADERS)) {
         return "concat_items";

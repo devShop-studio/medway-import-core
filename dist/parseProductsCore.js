@@ -41,7 +41,7 @@ export function parseProductsCore(input) {
     };
     const sampleSize = computeSampleSize(rows.length, mode);
     const sampleRows = rows.slice(0, sampleSize);
-    const sourceSchema = detectSourceSchema(rows, headerMeta);
+    const sourceSchema = detectSourceSchema(rows, headerMeta, input.origin);
     // Headerless detection via synthetic column keys
     const firstKeys = Object.keys(rows[0] || {});
     const isHeaderless = firstKeys.length > 0 && firstKeys.every((k) => /^col_\d+$/.test(k));

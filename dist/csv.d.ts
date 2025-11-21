@@ -12,6 +12,19 @@ export declare function parseCsvToRows(csvText: string): RawRow[];
  */
 export declare function parseCsvRaw(csvText: string): string[][];
 /**
+ * parseDsvRaw
+ * Generalized delimiter-separated values parser with quote handling.
+ * Supports ',', ';', '\t', '|'. Returns array-of-arrays without headers.
+ * Signed: EyosiyasJ
+ */
+export declare function parseDsvRaw(text: string, delim: "," | ";" | "\t" | "|"): string[][];
+/**
+ * detectDelimiterFromText
+ * Sniffs best delimiter among ',', ';', '\t', '|' based on column count stability.
+ * Signed: EyosiyasJ
+ */
+export declare function detectDelimiterFromText(text: string): "," | ";" | "\t" | "|";
+/**
  * Decide whether the first row is a real header or data.
  * Uses header-vs-data scoring heuristics; returns "none" for data-like first rows.
  * Signed: EyosiyasJ
