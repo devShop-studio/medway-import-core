@@ -299,6 +299,58 @@ Signed: EyosiyasJ
  
 Signed: EyosiyasJ
 
+### 2025-11-21 – Manufacturer/Brand Conservative Allowlists & Guards (EyosiyasJ)
+
+Added env-based allowlists to accommodate legitimate numeric edge cases without weakening invariants:
+- `ALLOWED_NUMERIC_BRANDS`: comma/semicolon-separated brand names allowed to contain digits (e.g., `3M`)
+- `ALLOWED_NUMERIC_MANUF`: comma/semicolon-separated manufacturer names allowed to contain digits (e.g., `XYZ Pharma 2000`)
+- Usage: set via environment before parsing (`ALLOWED_NUMERIC_BRANDS="3M;GSK 3" ALLOWED_NUMERIC_MANUF="XYZ Pharma 2000"`).
+
+Brand hardening: length cap (`≤40 chars`) and punctuation-heavy guard (`>3` of `-, , /, &, .`).
+
+Manufacturer hardening: punctuation-heavy guard and existing unit/strength rejection preserved; tail-scanning with hint words remains conservative.
+
+Concat items optionality: ensured `manufacturer_name` and `brand_name` are optional under `schema: concat_items` (no `E_REQUIRED_*` for missing values).
+
+Decomposer integration: brand head detection removes generic/strength/form tokens and applies allowlists; manufacturer detectors accept allowlisted numeric names.
+
+Tests: added targeted regression cases in `tests/run-tests.mjs` covering generic-only rows, brand+generic+strength+form, tail manufacturer in description, brand==generic demotion, org-like brand promotion to manufacturer, and contaminated manufacturer demotion.
+
+References:
+- `src/sanitize.ts:803–858` (env allowlists, brand/manufacturer guards)
+- `src/concatDecompose.ts:471–558` (allowlist-aware detectors)
+- `tests/run-tests.mjs:515–585` (manufacturer/brand tests)
+
+Signed: EyosiyasJ
+
+### 2025-11-21 – Field Invariants + Sanity Pass (EyosiyasJ)
+- Added per‑field invariants and a post‑parse sanity pass to reduce cross‑contamination and error noise while keeping rows importable.
+- Invariants:
+-  - Text‑only fields (`manufacturer_name`, `category`, `form`) reject digits and unit tokens; `batch_no` must be strictly alphanumeric and unit‑free.
+-  - Central helpers and patterns: `UNIT_RE`, `HAS_DIGIT_RE`, `ALNUM_BATCH_RE`, and helpers `hasDigit`, `hasUnitToken`, `isAlphaNumericBatch`.
+- Splitter enforcement:
+-  - Batch detection now gates on `isAlphaNumericBatch` and `!hasUnitToken` so unit‑like tokens don’t leak into `batch_no`.
+-  - Manufacturer detection rejects candidates containing digits/units.
+-  - Category is not decomposed by the splitter to avoid misclassification.
+- Leftover routing:
+-  - When a candidate fails invariants (e.g., manufacturer with digits), the value is routed to `product.description` instead of being forced into the field.
+- Post‑parse sanity checks:
+-  - After row sanitize, invariants are re‑checked; failing values are moved to `product.description` and a compact warning `E_FIELD_SUSPECT_VALUE` is recorded.
+- Cross‑field consistency sweeps:
+-  - Strip unit tokens and form words from `product.generic_name`; append stripped tokens to `product.description`.
+-  - If `product.form` equals `product.category` (or plural), clear category and append original to `product.description`.
+-  - If `manufacturer_name` is a country name, set `identity.coo` to ISO‑2 and demote the manufacturer text to `product.description`; if `coo` carries manufacturer hints (`pharma`, `labs`, `ltd`), demote to `product.description`.
+- Schema‑aware noise reduction (`concat_items`):
+-  - Allow pure integer `category` IDs.
+-  - Downgrade missing `strength`, `expiry`, and `COO` to warnings to keep POS‑style imports lightweight.
+- Validation mode safeguard:
+-  - `validationMode: "none"` suppresses all errors, including sanity‑pass suspects; rows are still normalized.
+- References:
+-  - `src/concatDecompose.ts:374–379` (helpers), `src/concatDecompose.ts:437–467` (batch/manufacturer gates)
+-  - `src/parseProductsCore.ts:410–492` (leftover routing for description/manufacturer/category)
+-  - `src/sanitize.ts:314–421` (helpers + batch sanitize), `src/sanitize.ts:578–837` (schema‑aware sanitize and sanity pass)
+-  - `src/index.ts:103–118` (schema‑aware required fields in meta)
+
 ### 2025-11-20 – Category & Field Guardrails (EyosiyasJ)
 - Umbrella category: when a category signal exists (`product.category` or `identity.cat`) but cannot be mapped to one of the 23 umbrella categories, the parser now sets `product.category = "NA"` and does not attach an error. This replaces the previous `E_UMBRELLA_NOT_FOUND` emission.
 - Numeric exclusion:
@@ -365,3 +417,17 @@ References
 - Sanitizers: `src/sanitize.ts:12-21`, `src/sanitize.ts:518-526`
 
 Signed: EyosiyasJ
+### 2025-11-23 – Product Type + Non‑Medicine Classification (EyosiyasJ)
+- Added `Product Type` column to Template v3 as column 2 with values `medicine` or `non-medicine` (parser is case-insensitive; UI shows canonical).
+- For `Product Type = medicine`: system behavior unchanged; required fields remain as before.
+- For `Product Type = non-medicine`: required fields are `generic_name`, `product.category` (must be either `Accessories` or `Chemicals & Reagents`), `pack contents`, `item quantity`, `country of manufacture`. Medicine-only fields `Strength`, `Dosage Form`, `Expiry Date` should be blank and are ignored if present.
+- Short-circuit classification when `Product Type` is missing/invalid (no NLP):
+  1) Category check: if category ∈ the 23 medicine umbrellas → medicine; if category ∈ {Accessories, Chemicals & Reagents} → non-medicine.
+  2) Dosage form check: if form ∈ known forms (tablet, capsule, syrup, suspension, injection, cream, ointment, gel, drops, spray, lotion, patch, powder) → medicine.
+  3) Strength check: if strength looks like `number + unit` (mg, g, mcg, IU, ml, %, ratios like mg/ml, mg/5ml) → medicine.
+  4) Default: non-medicine; refined to `Accessories` vs `Chemicals & Reagents` using a keyword library.
+- Shipped keyword library `NON_MEDICINE_KEYWORDS` grouped under:
+  - `accessories`: syringes/needles/IV sets; gloves/masks/PPE; dressings/bandages/plasters; diagnostics/test strips/kits; general accessories; small devices sold in pharmacies; personal care/hygiene items.
+  - `chemicalsAndReagents`: common chemicals/solutions/reagents (hydrogen peroxide, alcohols, chlorhexidine solution, povidone iodine, saline, distilled water, glycerin, liquid paraffin, petroleum jelly, sodium hypochlorite, bleach, potassium permanganate, formalin, buffer solution, lab reagent).
+- Updated template header checksum to `f9802bc8` to reflect the new column.
+- All unit and integration tests pass; header and headerless flows keep established behavior while Template v3 adopts Product Type.

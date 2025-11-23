@@ -20,6 +20,7 @@ const defs = [
     { key: "pieces_per_unit", type: "number", synonyms: ["pieces per unit", "pieces", "units per pack", "units per box"] },
     { key: "unit", type: "text", synonyms: ["unit", "measure", "uom", "unit of measure"] },
     { key: "reserved", type: "number", synonyms: ["reserved", "hold", "on reserve"] },
+    { key: "product_type", type: "text", synonyms: ["product type", "product_type"] },
 ];
 const strongTokens = new Set(["batch", "lot", "expiry", "expiration", "country", "price", "quantity", "qty", "stock", "form", "strength"]);
 const secondaryTokens = new Set(["number", "date", "name", "code"]);

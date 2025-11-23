@@ -64,6 +64,7 @@ export interface CanonicalProduct {
     sku?: string | null;
     purchase_unit?: string | null;
     unit?: string | null;
+    product_type?: string | null;
   };
 }
 

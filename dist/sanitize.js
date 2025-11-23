@@ -1,4 +1,4 @@
-import { classifyUmbrellaCategory, mapCategoryCodeToUmbrella, UMBRELLA_CATEGORY_INDEX } from "./category.js";
+import { classifyUmbrellaCategory, mapCategoryCodeToUmbrella, UMBRELLA_CATEGORY_INDEX, UMBRELLA_CATEGORY_RULES, NON_MEDICINE_KEYWORDS } from "./category.js";
 import { normalizeCountryToIso2 } from "./country.js";
 const FORM_ENUM = ["tablet", "capsule", "syrup", "injection", "cream", "ointment", "drops", "inhaler", "suspension", "solution", "gel", "spray", "lotion", "patch", "powder", "other"];
 const FORM_SYNONYMS = {
@@ -49,7 +49,26 @@ const asciiLower = (s) => String(s !== null && s !== void 0 ? s : "")
 const collapseWS = (s) => s.replace(/\s+/g, " ").trim();
 const onlyDigits = (s) => s.replace(/\D+/g, "");
 const hasDigit = (s) => /\d/.test(String(s !== null && s !== void 0 ? s : ""));
-const hasUnitToken = (s) => /(mg|mcg|g|ml|iu|%)/i.test(String(s !== null && s !== void 0 ? s : ""));
+const UNIT_RE = /\b(mg|mcg|g|kg|ml|l|iu|%|w\/v|w\/w|v\/v)\b/i;
+const hasUnitToken = (s) => UNIT_RE.test(String(s !== null && s !== void 0 ? s : ""));
+const envList = (name) => {
+    var _a, _b, _c;
+    const raw = String((_c = (_b = (_a = globalThis.process) === null || _a === void 0 ? void 0 : _a.env) === null || _b === void 0 ? void 0 : _b[name]) !== null && _c !== void 0 ? _c : "");
+    return new Set(raw.split(/[,;]+/).map((s) => s.trim().toLowerCase()).filter(Boolean));
+};
+const ALLOWED_NUMERIC_BRANDS = envList("ALLOWED_NUMERIC_BRANDS");
+const ALLOWED_NUMERIC_MANUF = envList("ALLOWED_NUMERIC_MANUF");
+const isAllowedNumericBrand = (s) => (/\d/.test(String(s !== null && s !== void 0 ? s : "")) && ALLOWED_NUMERIC_BRANDS.has(String(s !== null && s !== void 0 ? s : "").trim().toLowerCase()));
+const isAllowedNumericManuf = (s) => (/\d/.test(String(s !== null && s !== void 0 ? s : "")) && ALLOWED_NUMERIC_MANUF.has(String(s !== null && s !== void 0 ? s : "").trim().toLowerCase()));
+const punctCount = (s) => ((String(s !== null && s !== void 0 ? s : "").match(/[-,\/&\.]/g) || []).length);
+const ALNUM_BATCH_RE = /^[A-Za-z0-9\-_.\/]+$/;
+const isAlphaNumericBatch = (s) => {
+    const v = String(s !== null && s !== void 0 ? s : "");
+    if (!ALNUM_BATCH_RE.test(v))
+        return false;
+    return /[A-Za-z]/.test(v) || /^\d{4,}$/.test(v);
+};
+const MANUF_HINT_RE = /\b(pharma|pharmaceuticals?|labs?|laboratories|industries|industry|manufacturing|manufacturer|healthcare|biotech|med|medica|medicines|drug|plc|ltd|limited|inc|gmbh|s\.a\.|s\.p\.a\.|ag)\b/i;
 const lev = (a, b) => {
     const m = a.length, n = b.length, d = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
     for (let i = 0; i <= m; i++)
@@ -158,10 +177,15 @@ export function sanitizeBatchNo(v) {
         issues.push({ field: "batch_no", code: "W_BATCH_TRUNCATED", msg: "trimmed to max 20 chars", level: "warn" });
     }
     if (s) {
-        const hasAlpha = /[A-Z]/.test(s);
-        const hasDigitAny = /\d/.test(s);
-        if (!(hasAlpha && hasDigitAny)) {
-            issues.push({ field: "batch_no", code: "E_BATCH_ALPHA_NUM_MIX", msg: "batch_no must contain letters and digits", level: "error" });
+        const strengthLikeRe = /^\d+(?:\.\d+)?\s*(MG|MCG|G|KG|ML|L|IU|%)(?:\s*\/\s*\d+(?:\.\d+)?\s*(MG|MCG|G|KG|ML|L|%))?$/;
+        if (!isAlphaNumericBatch(s)) {
+            issues.push({ field: "batch_no", code: "E_BATCH_ALNUM", msg: "batch_no must be alphanumeric", level: "error" });
+        }
+        if (hasUnitToken(s)) {
+            issues.push({ field: "batch_no", code: "E_BATCH_UNIT_TOKEN", msg: "batch_no must not contain units", level: "error" });
+        }
+        if (strengthLikeRe.test(s)) {
+            issues.push({ field: "batch_no", code: "E_BATCH_STRENGTH_LIKE", msg: "batch_no looks like strength", level: "error" });
         }
     }
     return { value: s, issues };
@@ -255,7 +279,11 @@ export function sanitizePackageCode(v) {
         issues.push({ field: "pkg", code: "E_PKG_FORMAT", msg: "use 30TAB, 1BTLX100ML, 1VIALX10ML", level: "error" });
     return { value: s, issues };
 }
-export function sanitizeRow(input) {
+/**
+ * Sanitize a loosely-typed canonical row with schema-aware invariants.
+ * Signed: EyosiyasJ
+ */
+export function sanitizeRow(input, schema) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
     const issues = [];
     const out = { generic_name: "" };
@@ -282,12 +310,29 @@ export function sanitizeRow(input) {
         out.gtin = gt.value;
     issues.push(...gt.issues);
     out.category = collapseWS(String((_d = input.category) !== null && _d !== void 0 ? _d : "")).trim() || undefined;
-    if (out.category && /^\d+(?:\.\d+)?$/.test(out.category)) {
-        issues.push({ field: "category", code: "E_CATEGORY_NUMERIC", msg: "category cannot be numeric", level: "error" });
-        out.category = undefined;
-    }
-    if (out.category && (hasDigit(out.category) || hasUnitToken(out.category))) {
-        issues.push({ field: "category", code: "E_TEXT_DIGITS_SUSPECT", msg: "category must not contain digits/units", level: "warn" });
+    if (out.category) {
+        const cat = out.category;
+        const pureInt = /^\d+$/.test(cat);
+        const hasDigits = hasDigit(cat);
+        const hasUnits = hasUnitToken(cat);
+        if (schema === "concat_items") {
+            if (pureInt) {
+                // allow numeric CategoryId
+            }
+            else if (hasUnits || (hasDigits && /[A-Za-z]/.test(cat))) {
+                issues.push({ field: "category", code: "W_CATEGORY_SUSPECT", msg: "category rejected (digits/units)", level: "warn" });
+                out.category = undefined;
+            }
+        }
+        else {
+            if (/^\d+(?:\.\d+)?$/.test(cat)) {
+                issues.push({ field: "category", code: "E_CATEGORY_NUMERIC", msg: "category cannot be numeric", level: "error" });
+                out.category = undefined;
+            }
+            if (hasDigits || hasUnits) {
+                issues.push({ field: "category", code: "E_TEXT_DIGITS_SUSPECT", msg: "category must not contain digits/units", level: "warn" });
+            }
+        }
     }
     const rp = sanitizeBool(input.requires_prescription);
     if (rp.value !== undefined)
@@ -483,7 +528,7 @@ const mapIssueToParsed = (issue, rowIndex) => {
  * Signed: EyosiyasJ
  */
 export function sanitizeCanonicalRow(raw, rowIndex, schema, validationMode = "full") {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, _17, _18, _19, _20, _21, _22, _23, _24, _25, _26, _27, _28, _29, _30, _31, _32;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, _17, _18, _19, _20, _21, _22, _23, _24, _25, _26, _27, _28, _29, _30, _31, _32, _33, _34, _35, _36, _37, _38, _39;
     const flat = {
         generic_name: (_a = raw.product) === null || _a === void 0 ? void 0 : _a.generic_name,
         brand_name: (_b = raw.product) === null || _b === void 0 ? void 0 : _b.brand_name,
@@ -507,15 +552,73 @@ export function sanitizeCanonicalRow(raw, rowIndex, schema, validationMode = "fu
         pieces_per_unit: (_y = raw.pkg) === null || _y === void 0 ? void 0 : _y.pieces_per_unit,
         unit: (_z = raw.identity) === null || _z === void 0 ? void 0 : _z.unit,
     };
-    const { row, issues } = sanitizeRow(flat);
-    const filteredIssues = (() => {
-        if (schema === "concat_items") {
-            return issues.filter((i) => !(i.field === "category" && i.code === "E_TEXT_DIGITS_SUSPECT"));
+    // Product-Type aware adjustments for Template v3
+    let productTypeRaw = String((_1 = (_0 = raw.identity) === null || _0 === void 0 ? void 0 : _0.product_type) !== null && _1 !== void 0 ? _1 : "").trim().toLowerCase();
+    const isTemplateV3 = schema === "template_v3";
+    // Auto-suggest Product Type when missing using keyword library
+    if (isTemplateV3 && !productTypeRaw) {
+        const combined = [(_2 = raw.product) === null || _2 === void 0 ? void 0 : _2.generic_name, (_3 = raw.product) === null || _3 === void 0 ? void 0 : _3.brand_name, (_4 = raw.product) === null || _4 === void 0 ? void 0 : _4.description]
+            .map((v) => String(v !== null && v !== void 0 ? v : "").toLowerCase())
+            .join(" ");
+        const matchAny = (list) => list.some((kw) => combined.includes(kw));
+        const isAccessories = matchAny(NON_MEDICINE_KEYWORDS.accessories);
+        const isChemicals = matchAny(NON_MEDICINE_KEYWORDS.chemicalsAndReagents);
+        if (isAccessories || isChemicals) {
+            productTypeRaw = "non-medicine";
+            // Force category consistent with detected group
+            const forcedCat = isChemicals ? "Chemicals & Reagents" : "Accessories";
+            flat.category = forcedCat;
         }
-        return issues;
+    }
+    const isNonMedicine = isTemplateV3 && productTypeRaw === "non-medicine";
+    const isMedicine = isTemplateV3 && productTypeRaw === "medicine";
+    if (isTemplateV3) {
+        if (!productTypeRaw) {
+            if (validationMode !== "none") {
+                // identity.product_type missing
+                const err = { row: rowIndex, field: "identity.product_type", code: "E_PRODUCT_TYPE_MISSING", message: "Product Type required (medicine | non-medicine)" };
+                const errs = [err];
+                // continue; do not return early
+            }
+        }
+        else if (!(isNonMedicine || isMedicine)) {
+            if (validationMode !== "none") {
+                const err = { row: rowIndex, field: "identity.product_type", code: "E_PRODUCT_TYPE_INVALID", message: "Product Type must be medicine or non-medicine" };
+                const errs = [err];
+            }
+        }
+        if (isNonMedicine) {
+            // Non-medicine: ignore medicine-only fields before sanitization
+            flat.strength = undefined;
+            flat.form = undefined;
+            flat.expiry_date = undefined;
+        }
+    }
+    const { row, issues } = sanitizeRow(flat, schema);
+    const filteredIssues = (() => {
+        let base = issues;
+        if (schema === "concat_items") {
+            base = base.filter((i) => !(i.field === "category" && i.code === "E_TEXT_DIGITS_SUSPECT"));
+        }
+        if (isNonMedicine) {
+            base = base.filter((i) => !(i.field === "form" && i.code === "E_FORM_MISSING"));
+        }
+        return base;
     })();
     const baseIssues = validationMode === "errorsOnly" ? filteredIssues.filter((i) => i.level === "error") : filteredIssues;
-    const errors = validationMode === "none" ? [] : baseIssues.map((i) => mapIssueToParsed(i, rowIndex));
+    let errors = validationMode === "none" ? [] : baseIssues.map((i) => mapIssueToParsed(i, rowIndex));
+    // Product Type errors appended post-sanitize issues
+    if (validationMode !== "none" && isTemplateV3) {
+        if (!productTypeRaw) {
+            errors.push({ row: rowIndex, field: "identity.product_type", code: "E_PRODUCT_TYPE_MISSING", message: "Product Type required (medicine | non-medicine)" });
+        }
+        else if (!(isNonMedicine || isMedicine)) {
+            errors.push({ row: rowIndex, field: "identity.product_type", code: "E_PRODUCT_TYPE_INVALID", message: "Product Type must be medicine or non-medicine" });
+        }
+    }
+    if (validationMode !== "none" && isNonMedicine) {
+        errors = errors.filter((e) => !((e.field === "product.form" && e.code.startsWith("E_FORM"))));
+    }
     if (!row)
         return { row: null, errors };
     const hasGeneric = Boolean(row.generic_name && row.generic_name.trim());
@@ -529,24 +632,31 @@ export function sanitizeCanonicalRow(raw, rowIndex, schema, validationMode = "fu
     };
     const doseSignalPresent = Boolean(row.strength && String(row.strength).trim());
     const relaxed = schema === "concat_items" && !doseSignalPresent;
+    const doseRequired = !relaxed && !isNonMedicine;
     if (validationMode !== "none" && emptyish(row.generic_name)) {
         errors.push({ row: rowIndex, field: "product.generic_name", code: "E_REQUIRED_GENERIC_NAME", message: "generic_name required" });
     }
-    if (validationMode !== "none" && !relaxed) {
-        if (emptyish(row.strength)) {
-            errors.push({ row: rowIndex, field: "product.strength", code: "E_REQUIRED_STRENGTH", message: "strength required" });
-        }
-        if (emptyish(row.form)) {
-            errors.push({ row: rowIndex, field: "product.form", code: "E_REQUIRED_FORM", message: "form required" });
+    if (validationMode !== "none") {
+        if (doseRequired) {
+            if (emptyish(row.strength)) {
+                const code = schema === "concat_items" ? "W_OPTIONAL_STRENGTH_MISSING" : "E_REQUIRED_STRENGTH";
+                const message = schema === "concat_items" ? "strength recommended for concat_items" : "strength required";
+                errors.push({ row: rowIndex, field: "product.strength", code, message });
+            }
+            if (emptyish(row.form)) {
+                errors.push({ row: rowIndex, field: "product.form", code: "E_REQUIRED_FORM", message: "form required" });
+            }
         }
         if (emptyish(row.category)) {
             errors.push({ row: rowIndex, field: "product.category", code: "E_REQUIRED_CATEGORY", message: "category required" });
         }
     }
     const expiryIso = parseDateFlexible(row.expiry_date);
-    if (validationMode !== "none" && !relaxed) {
+    if (validationMode !== "none" && !relaxed && !isNonMedicine) {
         if (emptyish(row.expiry_date)) {
-            errors.push({ row: rowIndex, field: "batch.expiry_date", code: "E_REQUIRED_EXPIRY", message: "expiry_date required" });
+            const code = schema === "concat_items" ? "W_OPTIONAL_EXPIRY_MISSING" : "E_REQUIRED_EXPIRY";
+            const message = schema === "concat_items" ? "expiry recommended for concat_items" : "expiry_date required";
+            errors.push({ row: rowIndex, field: "batch.expiry_date", code, message });
         }
     }
     if (validationMode !== "none") {
@@ -565,44 +675,63 @@ export function sanitizeCanonicalRow(raw, rowIndex, schema, validationMode = "fu
             errors.push({ row: rowIndex, field: "pkg.pieces_per_unit", code: "E_REQUIRED_PACK_CONTENTS", message: "pack contents required" });
         }
         if (emptyish(row.coo)) {
-            errors.push({ row: rowIndex, field: "identity.coo", code: "E_REQUIRED_COO", message: "country of origin required" });
+            const code = schema === "concat_items" ? "W_OPTIONAL_COO_MISSING" : "E_REQUIRED_COO";
+            const message = schema === "concat_items" ? "COO recommended for concat_items" : "country of origin required";
+            errors.push({ row: rowIndex, field: "identity.coo", code, message });
         }
         if (row.on_hand === undefined || row.on_hand === null || Number.isNaN(Number(row.on_hand))) {
             errors.push({ row: rowIndex, field: "batch.on_hand", code: "E_REQUIRED_QUANTITY", message: "quantity required" });
         }
     }
+    // Product-Type category constraints
+    if (validationMode !== "none" && isTemplateV3 && !emptyish(row.category)) {
+        const catLower = String((_5 = row.category) !== null && _5 !== void 0 ? _5 : "").trim().toLowerCase();
+        if (isNonMedicine) {
+            const allowed = new Set(["accessories", "chemicals & reagents"]);
+            if (!allowed.has(catLower)) {
+                errors.push({ row: rowIndex, field: "product.category", code: "E_CATEGORY_NON_MED_INVALID", message: "category must be either \"Accessories\" or \"Chemicals & Reagents\"" });
+            }
+        }
+        else if (isMedicine) {
+            const allowedLabels = new Set(UMBRELLA_CATEGORY_RULES.map((r) => String(r.label).toLowerCase()));
+            if (!allowedLabels.has(catLower)) {
+                errors.push({ row: rowIndex, field: "product.category", code: "E_CATEGORY_MED_INVALID", message: "category must be one of the 23 medicine categories" });
+            }
+        }
+    }
     // Do not hard-drop on stock/identity errors; apps decide readiness.
     const canonical = {
         product: {
-            generic_name: (_0 = row.generic_name) !== null && _0 !== void 0 ? _0 : "",
-            brand_name: (_2 = ((_1 = row.brand_name) !== null && _1 !== void 0 ? _1 : null)) !== null && _2 !== void 0 ? _2 : null,
-            manufacturer_name: (_4 = ((_3 = row.manufacturer_name) !== null && _3 !== void 0 ? _3 : null)) !== null && _4 !== void 0 ? _4 : null,
-            strength: (_5 = row.strength) !== null && _5 !== void 0 ? _5 : "",
-            form: (_6 = row.form) !== null && _6 !== void 0 ? _6 : "",
-            category: (_7 = row.category) !== null && _7 !== void 0 ? _7 : null,
+            generic_name: (_6 = row.generic_name) !== null && _6 !== void 0 ? _6 : "",
+            brand_name: (_8 = ((_7 = row.brand_name) !== null && _7 !== void 0 ? _7 : null)) !== null && _8 !== void 0 ? _8 : null,
+            manufacturer_name: (_10 = ((_9 = row.manufacturer_name) !== null && _9 !== void 0 ? _9 : null)) !== null && _10 !== void 0 ? _10 : null,
+            strength: (_11 = row.strength) !== null && _11 !== void 0 ? _11 : "",
+            form: (_12 = row.form) !== null && _12 !== void 0 ? _12 : "",
+            category: (_13 = row.category) !== null && _13 !== void 0 ? _13 : null,
             requires_prescription: typeof row.requires_prescription === "boolean" ? row.requires_prescription : null,
             is_controlled: typeof row.is_controlled === "boolean" ? row.is_controlled : null,
-            storage_conditions: (_8 = row.storage_conditions) !== null && _8 !== void 0 ? _8 : null,
-            description: (_9 = row.description) !== null && _9 !== void 0 ? _9 : null,
+            storage_conditions: (_14 = row.storage_conditions) !== null && _14 !== void 0 ? _14 : null,
+            description: (_15 = row.description) !== null && _15 !== void 0 ? _15 : null,
         },
         batch: {
-            batch_no: (_10 = row.batch_no) !== null && _10 !== void 0 ? _10 : "",
+            batch_no: (_16 = row.batch_no) !== null && _16 !== void 0 ? _16 : "",
             expiry_date: expiryIso !== null && expiryIso !== void 0 ? expiryIso : "",
-            on_hand: (_11 = row.on_hand) !== null && _11 !== void 0 ? _11 : 0,
-            unit_price: (_12 = row.unit_price) !== null && _12 !== void 0 ? _12 : null,
-            coo: (_13 = row.coo) !== null && _13 !== void 0 ? _13 : null,
+            on_hand: (_17 = row.on_hand) !== null && _17 !== void 0 ? _17 : 0,
+            unit_price: (_18 = row.unit_price) !== null && _18 !== void 0 ? _18 : null,
+            coo: (_19 = row.coo) !== null && _19 !== void 0 ? _19 : null,
         },
     };
-    const identityHasValues = Boolean(row.cat || row.frm || row.pkg || row.coo || row.sku);
+    const identityHasValues = Boolean(row.cat || row.frm || row.pkg || row.coo || row.sku || productTypeRaw);
     if (identityHasValues) {
         canonical.identity = {
-            cat: (_14 = row.cat) !== null && _14 !== void 0 ? _14 : null,
-            frm: (_15 = row.frm) !== null && _15 !== void 0 ? _15 : null,
-            pkg: (_16 = row.pkg) !== null && _16 !== void 0 ? _16 : null,
-            coo: (_17 = row.coo) !== null && _17 !== void 0 ? _17 : null,
-            sku: (_18 = row.sku) !== null && _18 !== void 0 ? _18 : null,
-            purchase_unit: (_19 = row.purchase_unit) !== null && _19 !== void 0 ? _19 : null,
-            unit: (_20 = row.unit) !== null && _20 !== void 0 ? _20 : null,
+            cat: (_20 = row.cat) !== null && _20 !== void 0 ? _20 : null,
+            frm: (_21 = row.frm) !== null && _21 !== void 0 ? _21 : null,
+            pkg: (_22 = row.pkg) !== null && _22 !== void 0 ? _22 : null,
+            coo: (_23 = row.coo) !== null && _23 !== void 0 ? _23 : null,
+            sku: (_24 = row.sku) !== null && _24 !== void 0 ? _24 : null,
+            purchase_unit: (_25 = row.purchase_unit) !== null && _25 !== void 0 ? _25 : null,
+            unit: (_26 = row.unit) !== null && _26 !== void 0 ? _26 : null,
+            product_type: productTypeRaw ? productTypeRaw : null,
         };
     }
     // Build packaging namespace for pack contents
@@ -625,9 +754,9 @@ export function sanitizeCanonicalRow(raw, rowIndex, schema, validationMode = "fu
     const umbrellaFromCode = mapCategoryCodeToUmbrella(row.cat);
     const umbrella = umbrellaFromCode !== null && umbrellaFromCode !== void 0 ? umbrellaFromCode : classifyUmbrellaCategory({
         generic_name: canonical.product.generic_name,
-        brand_name: (_21 = canonical.product.brand_name) !== null && _21 !== void 0 ? _21 : undefined,
-        category: (_22 = canonical.product.category) !== null && _22 !== void 0 ? _22 : undefined,
-        description: (_23 = canonical.product.description) !== null && _23 !== void 0 ? _23 : undefined,
+        brand_name: (_27 = canonical.product.brand_name) !== null && _27 !== void 0 ? _27 : undefined,
+        category: (_28 = canonical.product.category) !== null && _28 !== void 0 ? _28 : undefined,
+        description: (_29 = canonical.product.description) !== null && _29 !== void 0 ? _29 : undefined,
     });
     if (umbrella) {
         canonical.product.umbrella_category = umbrella;
@@ -639,10 +768,161 @@ export function sanitizeCanonicalRow(raw, rowIndex, schema, validationMode = "fu
         }
     }
     else {
-        const hasCategorySignal = Boolean(((_24 = row.category) !== null && _24 !== void 0 ? _24 : "").trim()) || Boolean(((_25 = row.cat) !== null && _25 !== void 0 ? _25 : "").trim());
+        const hasCategorySignal = Boolean(((_30 = row.category) !== null && _30 !== void 0 ? _30 : "").trim()) || Boolean(((_31 = row.cat) !== null && _31 !== void 0 ? _31 : "").trim());
         if (hasCategorySignal) {
             if (!canonical.product.category || !String(canonical.product.category).trim()) {
                 canonical.product.category = "NA";
+            }
+        }
+    }
+    // Post-parse sanity pass: enforce invariants and downgrade suspicious values
+    const strengthLikeRe = /^\d+(?:\.\d+)?\s*(mg|mcg|g|kg|ml|l|iu|%)(?:\s*\/\s*\d+(?:\.\d+)?\s*(mg|mcg|g|kg|ml|l|%))?$/i;
+    const pushSuspect = (fieldPath, value) => {
+        if (validationMode !== "none") {
+            errors.push({ row: rowIndex, field: fieldPath, code: "E_FIELD_SUSPECT_VALUE", message: "value failed invariants; moved to description" });
+        }
+    };
+    if (canonical.product.form && (hasDigit(canonical.product.form) || hasUnitToken(canonical.product.form))) {
+        const moved = canonical.product.form;
+        canonical.product.form = "";
+        canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+        pushSuspect("product.form", moved);
+    }
+    if (canonical.product.category) {
+        const c = String(canonical.product.category);
+        const pureInt = /^\d+$/.test(c);
+        const hasDigits = hasDigit(c);
+        const hasUnits = hasUnitToken(c);
+        if (schema === "concat_items") {
+            if (!(pureInt || (!hasDigits && !hasUnits))) {
+                const moved = c;
+                canonical.product.category = "";
+                canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+                pushSuspect("product.category", moved);
+            }
+        }
+        else {
+            if (hasDigits || hasUnits) {
+                const moved = c;
+                canonical.product.category = "";
+                canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+                pushSuspect("product.category", moved);
+            }
+        }
+    }
+    // Generic vs strength/form purity: strip unit tokens and form words from generic_name
+    if (canonical.product.generic_name) {
+        const original = canonical.product.generic_name;
+        const unitTokenRe = /\b(\d+(?:\.\d+)?\s*(mg|mcg|g|kg|ml|l|iu|%)\b(?:\s*\/\s*\d+(?:\.\d+)?\s*(mg|mcg|g|kg|ml|l|%))?)/gi;
+        const formWords = [...Object.keys(FORM_SYNONYMS), ...FORM_ENUM].map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+        const formRe = new RegExp(`\\b(${formWords.join("|")})s?\\b`, "gi");
+        const removed = [];
+        let g = original;
+        g = g.replace(unitTokenRe, (m) => { removed.push(m); return " "; });
+        g = g.replace(formRe, (m) => { removed.push(m); return " "; });
+        g = collapseWS(g);
+        if (removed.length && g) {
+            canonical.product.generic_name = g;
+            const moved = removed.join(" ");
+            canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+            pushSuspect("product.generic_name", moved);
+        }
+    }
+    // Form vs category duplication: avoid identical values
+    if (canonical.product.form && canonical.product.category) {
+        const f = String(canonical.product.form).toLowerCase();
+        const c = String(canonical.product.category).toLowerCase();
+        if (c === f || c === `${f}s`) {
+            const moved = canonical.product.category;
+            canonical.product.category = "";
+            canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+            pushSuspect("product.category", moved);
+        }
+    }
+    // COO vs manufacturer swap when manufacturer is a country name
+    if (canonical.product.manufacturer_name) {
+        const man = String(canonical.product.manufacturer_name);
+        const iso = normalizeCountryToIso2(man);
+        if (iso) {
+            canonical.product.manufacturer_name = "";
+            canonical.batch.coo = iso;
+            canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${man}` : man).trim();
+            pushSuspect("product.manufacturer_name", man);
+        }
+        // Manufacturer should not include unit/form hints; demote if contaminated
+        const formWords = [...Object.keys(FORM_SYNONYMS), ...FORM_ENUM].map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+        const formRe = new RegExp(`\\b(${formWords.join("|")})s?\\b`, "i");
+        if (hasUnitToken(man) || formRe.test(man)) {
+            const moved = man;
+            canonical.product.manufacturer_name = "";
+            canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+            pushSuspect("product.manufacturer_name", moved);
+        }
+    }
+    // COO field should be country-like; if it carries manufacturer tokens, demote to description
+    if (canonical.batch.coo && String(canonical.batch.coo).length > 2) {
+        const cooRaw = String(canonical.batch.coo);
+        const manufHint = /\b(pharm|pharma|pharmaceuticals|labs?|ltd|industries|bio|med|health)\b/i;
+        if (manufHint.test(cooRaw)) {
+            const moved = cooRaw;
+            canonical.batch.coo = null;
+            canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+            pushSuspect("identity.coo", moved);
+        }
+    }
+    if (canonical.batch.batch_no) {
+        const b = String(canonical.batch.batch_no);
+        if (!isAlphaNumericBatch(b) || hasUnitToken(b) || strengthLikeRe.test(b)) {
+            const moved = b;
+            canonical.batch.batch_no = "";
+            canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+            pushSuspect("batch.batch_no", moved);
+        }
+    }
+    if (canonical.product.manufacturer_name) {
+        const m = String(canonical.product.manufacturer_name);
+        const digitsInvalid = hasDigit(m) && !isAllowedNumericManuf(m);
+        if (digitsInvalid || hasUnitToken(m) || strengthLikeRe.test(m) || punctCount(m) > 3) {
+            const moved = m;
+            canonical.product.manufacturer_name = "";
+            canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+            pushSuspect("product.manufacturer_name", moved);
+        }
+    }
+    if (canonical.batch.coo) {
+        const c = String(canonical.batch.coo);
+        if (hasDigit(c) || hasUnitToken(c) || strengthLikeRe.test(c)) {
+            const moved = c;
+            canonical.batch.coo = null;
+            canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+            pushSuspect("identity.coo", moved);
+        }
+    }
+    // Brand sanity: avoid conflicts and contamination
+    if (canonical.product.brand_name) {
+        const b = String(canonical.product.brand_name);
+        const eq = (x) => String(x !== null && x !== void 0 ? x : "").trim().toLowerCase() === b.trim().toLowerCase();
+        const formWords = [...Object.keys(FORM_SYNONYMS), ...FORM_ENUM].map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+        const formRe = new RegExp(`\\b(${formWords.join("|")})s?\\b`, "i");
+        const digitsInvalid = /\d/.test(b) && !isAllowedNumericBrand(b);
+        if (eq(canonical.product.generic_name) || eq(canonical.product.manufacturer_name) || hasUnitToken(b) || formRe.test(b) || digitsInvalid || b.length > 40 || punctCount(b) > 3) {
+            const moved = b;
+            canonical.product.brand_name = null;
+            canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+            pushSuspect("product.brand_name", moved);
+        }
+        else if (MANUF_HINT_RE.test(b)) {
+            // If brand looks like a manufacturer and manufacturer is empty, promote conservatively
+            if (!canonical.product.manufacturer_name && !(/\d/.test(b)) && !hasUnitToken(b)) {
+                canonical.product.manufacturer_name = b;
+                canonical.product.brand_name = null;
+                pushSuspect("product.manufacturer_name", b);
+            }
+            else {
+                const moved = b;
+                canonical.product.brand_name = null;
+                canonical.product.description = (canonical.product.description ? `${canonical.product.description} ${moved}` : moved).trim();
+                pushSuspect("product.brand_name", moved);
             }
         }
     }
@@ -651,12 +931,19 @@ export function sanitizeCanonicalRow(raw, rowIndex, schema, validationMode = "fu
         const s = String(v !== null && v !== void 0 ? v : "").trim();
         return s ? s : "NA";
     };
-    canonical.product.brand_name = textNA((_26 = canonical.product.brand_name) !== null && _26 !== void 0 ? _26 : "");
-    canonical.product.manufacturer_name = textNA((_27 = canonical.product.manufacturer_name) !== null && _27 !== void 0 ? _27 : "");
-    canonical.product.form = textNA((_28 = canonical.product.form) !== null && _28 !== void 0 ? _28 : "");
-    canonical.product.category = textNA((_29 = canonical.product.category) !== null && _29 !== void 0 ? _29 : "");
-    canonical.product.storage_conditions = textNA((_30 = canonical.product.storage_conditions) !== null && _30 !== void 0 ? _30 : "");
-    canonical.product.description = textNA((_31 = canonical.product.description) !== null && _31 !== void 0 ? _31 : "");
-    canonical.batch.batch_no = textNA((_32 = canonical.batch.batch_no) !== null && _32 !== void 0 ? _32 : "");
+    canonical.product.brand_name = textNA((_32 = canonical.product.brand_name) !== null && _32 !== void 0 ? _32 : "");
+    canonical.product.manufacturer_name = textNA((_33 = canonical.product.manufacturer_name) !== null && _33 !== void 0 ? _33 : "");
+    canonical.product.form = textNA((_34 = canonical.product.form) !== null && _34 !== void 0 ? _34 : "");
+    canonical.product.category = textNA((_35 = canonical.product.category) !== null && _35 !== void 0 ? _35 : "");
+    canonical.product.storage_conditions = textNA((_36 = canonical.product.storage_conditions) !== null && _36 !== void 0 ? _36 : "");
+    {
+        const d = String((_37 = canonical.product.description) !== null && _37 !== void 0 ? _37 : "").trim();
+        const m = d.match(/^(.+)\s+\1$/i);
+        if (m) {
+            canonical.product.description = m[1];
+        }
+    }
+    canonical.product.description = textNA((_38 = canonical.product.description) !== null && _38 !== void 0 ? _38 : "");
+    canonical.batch.batch_no = textNA((_39 = canonical.batch.batch_no) !== null && _39 !== void 0 ? _39 : "");
     return { row: canonical, errors };
 }

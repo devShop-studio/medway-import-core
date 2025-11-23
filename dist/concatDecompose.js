@@ -25,6 +25,8 @@ export function decomposeConcatenatedCell(raw, opts) {
     detectBatch(tokens, extractions);
     detectExpiry(tokens, extractions);
     detectManufacturer(cleaned, extractions);
+    detectManufacturerHint(cleaned, extractions);
+    detectBrandHead(cleaned, extractions);
     const hasExtraction = (field) => extractions.some((e) => e.field === field);
     if (splitFallback.strength && !hasExtraction("product.strength")) {
         extractions.push({ field: "product.strength", value: splitFallback.strength, confidence: 0.8, reason: "name_split_strength" });
@@ -222,7 +224,7 @@ const FORM_DICTIONARY = {
 };
 function detectFormPhrase(raw) {
     const lower = String(raw !== null && raw !== void 0 ? raw : "").toLowerCase();
-    const hasDigitOrUnit = /\d/.test(lower) || /(mg|mcg|ml|iu|%)/i.test(lower);
+    const hasDigitOrUnit = HAS_DIGIT_RE.test(lower) || UNIT_RE.test(lower);
     for (const [canonical, variants] of Object.entries(FORM_DICTIONARY)) {
         const sorted = [...variants].sort((a, b) => b.length - a.length);
         for (const v of sorted) {
@@ -323,8 +325,24 @@ const FORM_KEYWORDS = {
     POWDER: "powder",
     SPRAY: "spray",
 };
-function hasDigit(s) { return /\d/.test(s); }
-function hasUnitToken(s) { return /(mg|mcg|ml|iu|%)/i.test(s); }
+const UNIT_RE = /\b(mg|mcg|g|kg|ml|l|iu|%|w\/v|w\/w|v\/v)\b/i;
+const HAS_DIGIT_RE = /\d/;
+const ALNUM_BATCH_RE = /^[A-Za-z0-9\-_.\/]+$/;
+function hasDigit(s) { return HAS_DIGIT_RE.test(String(s !== null && s !== void 0 ? s : "")); }
+function hasUnitToken(s) { return UNIT_RE.test(String(s !== null && s !== void 0 ? s : "")); }
+function envList(name) {
+    var _a, _b, _c;
+    const raw = String((_c = (_b = (_a = globalThis.process) === null || _a === void 0 ? void 0 : _a.env) === null || _b === void 0 ? void 0 : _b[name]) !== null && _c !== void 0 ? _c : "");
+    return new Set(raw.split(/[,;]+/).map((s) => s.trim().toLowerCase()).filter(Boolean));
+}
+const ALLOWED_NUMERIC_BRANDS = envList("ALLOWED_NUMERIC_BRANDS");
+const ALLOWED_NUMERIC_MANUF = envList("ALLOWED_NUMERIC_MANUF");
+function isAllowedNumericBrandCell(s) { return HAS_DIGIT_RE.test(String(s !== null && s !== void 0 ? s : "")) && ALLOWED_NUMERIC_BRANDS.has(String(s !== null && s !== void 0 ? s : "").trim().toLowerCase()); }
+function isAllowedNumericManufCell(s) { return HAS_DIGIT_RE.test(String(s !== null && s !== void 0 ? s : "")) && ALLOWED_NUMERIC_MANUF.has(String(s !== null && s !== void 0 ? s : "").trim().toLowerCase()); }
+function isAlphaNumericBatch(s) {
+    const v = String(s !== null && s !== void 0 ? s : "");
+    return ALNUM_BATCH_RE.test(v) && /[A-Za-z]/.test(v);
+}
 function detectForm(tokens, out) {
     for (const tok of tokens) {
         if (tok.consumed)
@@ -401,18 +419,28 @@ function detectBatch(tokens, out) {
         if (tok.consumed)
             continue;
         if (BATCH_PATTERN.test(tok.text)) {
-            out.push({ field: "batch.batch_no", value: tok.text, confidence: 0.8, reason: "batch_pattern" });
-            tok.consumed = true;
-            return;
+            if (isAlphaNumericBatch(tok.text) && !hasUnitToken(tok.text)) {
+                out.push({ field: "batch.batch_no", value: tok.text, confidence: 0.8, reason: "batch_pattern" });
+                tok.consumed = true;
+                return;
+            }
+            else {
+                continue;
+            }
         }
         if (/^(LOT|LOTNO|LOTNO\.|BNO|B\.NO|B-NO|B\/NO|BATCHNO|BATCH NO)$/i.test(tok.text)) {
             const idx = tokens.indexOf(tok);
             const next = tokens[idx + 1];
             if (next && !next.consumed) {
-                out.push({ field: "batch.batch_no", value: next.text, confidence: 0.75, reason: "batch_labeled" });
-                tok.consumed = true;
-                next.consumed = true;
-                return;
+                if (isAlphaNumericBatch(next.text) && !hasUnitToken(next.text)) {
+                    out.push({ field: "batch.batch_no", value: next.text, confidence: 0.75, reason: "batch_labeled" });
+                    tok.consumed = true;
+                    next.consumed = true;
+                    return;
+                }
+                else {
+                    // do not consume; leave in leftover
+                }
             }
         }
     }
@@ -440,6 +468,59 @@ function detectExpiry(tokens, out) {
         }
     }
 }
+const MANUF_HINTS = [
+    "PHARMA", "PHARMACEUTICAL", "PHARMACEUTICALS", "LABS", "LABORATORIES", "INDUSTRIES", "INDUSTRY", "MANUFACTURING", "MANUFACTURER",
+    "HEALTHCARE", "BIOTECH", "MED", "MEDICA", "MEDICINES", "DRUG", "PLC", "LTD", "LIMITED", "INC", "GMBH", "S.A.", "S.P.A.", "AG"
+];
+function detectManufacturerHint(raw, out) {
+    const text = String(raw !== null && raw !== void 0 ? raw : "");
+    const segments = text.split(/[;|,]+|\s+-\s+|\s•\s/).map((s) => s.trim()).filter(Boolean);
+    for (let i = segments.length - 1; i >= 0; i--) {
+        const seg = segments[i];
+        const upper = seg.toUpperCase();
+        const hasHint = MANUF_HINTS.some((h) => upper.includes(h));
+        if (hasHint && !hasUnitToken(seg) && (!hasDigit(seg) || isAllowedNumericManufCell(seg))) {
+            out.push({ field: "product.manufacturer_name", value: seg, confidence: 0.75, reason: "manufacturer_hint_tail" });
+            return;
+        }
+    }
+}
+function detectBrandHead(raw, out) {
+    var _a, _b;
+    const s = String(raw !== null && raw !== void 0 ? raw : "");
+    if (!s.trim())
+        return;
+    const upper = s.toUpperCase();
+    // Heuristic: take head segment before a known generic token occurrence
+    // Use a conservative split by dash/comma and whitespace blocks
+    const head = (_b = (_a = s.split(/[;|,]+|\s+-\s+/)[0]) === null || _a === void 0 ? void 0 : _a.trim()) !== null && _b !== void 0 ? _b : "";
+    if (!head)
+        return;
+    if (head.length > 40)
+        return;
+    const split = splitNameGenericStrengthForm(s);
+    let candidate = head;
+    if (split.strength) {
+        const re = new RegExp(split.strength.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        candidate = candidate.replace(re, "").trim();
+    }
+    if (split.form) {
+        const re = new RegExp(split.form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        candidate = candidate.replace(re, "").trim();
+    }
+    const parts = candidate.split(/\s+/).filter(Boolean);
+    if (parts.length === 0)
+        return;
+    // Prefer the first word as the brand head
+    candidate = parts[0];
+    if ((hasDigit(candidate) && !isAllowedNumericBrandCell(candidate)) || hasUnitToken(candidate))
+        return;
+    // Avoid dosage form terms
+    const hasFormWord = Object.keys(FORM_KEYWORDS).some((k) => candidate.toUpperCase().includes(k));
+    if (hasFormWord)
+        return;
+    out.push({ field: "product.brand_name", value: candidate, confidence: 0.6, reason: "brand_head_heuristic" });
+}
 const MANUF_MARKERS = ["MFG BY", "MFD BY", "MANUFACTURED BY", "MARKETED BY"];
 function detectManufacturer(raw, out) {
     const upper = raw.toUpperCase();
@@ -464,7 +545,9 @@ function detectManufacturer(raw, out) {
     const after = raw.slice(idx + marker.length).trim();
     if (!after || after.length < 3)
         return;
-    out.push({ field: "product.manufacturer_name", value: after, confidence: 0.8, reason: "manufacturer_phrase" });
+    if (!hasUnitToken(after) && (!hasDigit(after) || isAllowedNumericManufCell(after))) {
+        out.push({ field: "product.manufacturer_name", value: after, confidence: 0.8, reason: "manufacturer_phrase" });
+    }
 }
 /**
  * Opportunistic acceptance gate: require strong structural signals and avoid formula-like text.
@@ -494,7 +577,7 @@ function looksFormulaLike(s) {
     if (!t.trim())
         return false;
     const sepCount = (t.match(/[,+&]/g) || []).length + (t.includes(" and ") ? 1 : 0);
-    const hasUnit = /\b\d+(?:\.\d+)?\s*(mg|mcg|g|iu|ml|%)\b/.test(t) || /\b\d+(?:\.\d+)?\s*(mg|mcg|g|ml)\s*\/\s*\d+(?:\.\d+)?\s*(mg|mcg|g|ml)\b/.test(t);
+    const hasUnit = /\b\d+(?:\.\d+)?\s*(mg|mcg|g|kg|iu|ml|l|%)\b/.test(t) || /\b\d+(?:\.\d+)?\s*(mg|mcg|g|kg|ml|l)\s*\/\s*\d+(?:\.\d+)?\s*(mg|mcg|g|kg|ml|l)\b/.test(t);
     const hasPack = /(\b\d+\s*[xX]\s*\d+|\b\d+\s*(?:'s|pcs|pieces|tabs|caps)\b)/.test(t);
     const words = t.split(/[^a-z]+/).filter(Boolean);
     const longWords = words.filter((w) => w.length >= 6).length;

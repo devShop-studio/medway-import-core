@@ -36,6 +36,7 @@ export interface CanonicalProduct {
         sku?: string | null;
         purchase_unit?: string | null;
         unit?: string | null;
+        product_type?: string | null;
     };
 }
 export type SourceSchema = "template_v3" | "concat_items" | "legacy_items" | "csv_generic" | "unknown";

@@ -92,4 +92,14 @@ export interface UmbrellaClassificationInput {
  * - Text-based classification (`classifyUmbrellaCategory`) with weighted signals and guardrails.
  * Signed: EyosiyasJ
  */
+/**
+ * NON_MEDICINE_KEYWORDS
+ * Keyword library for auto-suggesting Product Type = non-medicine and choosing
+ * category among Accessories vs Chemicals & Reagents.
+ * Signed: EyosiyasJ
+ */
+export declare const NON_MEDICINE_KEYWORDS: {
+    accessories: string[];
+    chemicalsAndReagents: string[];
+};
 //# sourceMappingURL=category.d.ts.map

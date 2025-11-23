@@ -3,6 +3,7 @@ import { suggestHeaderMappings } from "./semantics.js";
 import { decomposeConcatenatedCell } from "./concatDecompose.js";
 const TEMPLATE_V3_HEADERS = [
     "Generic (International Name)",
+    "Product Type",
     "Strength",
     "Dosage Form",
     "Product Category",
@@ -42,7 +43,7 @@ const LEGACY_ITEMS_HEADERS = [
     "Recommended",
 ];
 const TEMPLATE_VERSION = "MedWay_Template_v3";
-const TEMPLATE_CHECKSUM = "b6ba6708";
+const TEMPLATE_CHECKSUM = "f9802bc8";
 const HEADER_SYNONYMS = {
     brand_name: [
         "brand",
@@ -73,7 +74,6 @@ const HEADER_SYNONYMS = {
         "dosage_form",
         "product_form",
         "type",
-        "product_type",
         "dose_form",
     ],
     category: [
@@ -128,6 +128,7 @@ const HEADER_SYNONYMS = {
     purchase_unit: ["purchase_unit", "pack", "box", "carton"],
     pieces_per_unit: ["pieces_per_unit", "pieces", "units_per_pack", "units_per_box"],
     unit: ["unit", "uom", "unit_of_measure"],
+    product_type: ["product_type"],
 };
 const FORM_SYNONYMS = {
     tab: "tablet",
@@ -344,7 +345,7 @@ function isRowEmpty(raw) {
  * Signed: EyosiyasJ
  */
 function ensureCanonical(flat) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
     const product = {
         generic_name: (_a = flat.generic_name) !== null && _a !== void 0 ? _a : "",
         brand_name: (_b = flat.brand_name) !== null && _b !== void 0 ? _b : null,
@@ -370,7 +371,8 @@ function ensureCanonical(flat) {
         flat.coo ||
         flat.sku ||
         flat.purchase_unit ||
-        flat.unit
+        flat.unit ||
+        flat.product_type
         ? {
             cat: (_r = flat.cat) !== null && _r !== void 0 ? _r : null,
             frm: (_s = flat.frm) !== null && _s !== void 0 ? _s : null,
@@ -379,6 +381,7 @@ function ensureCanonical(flat) {
             sku: (_v = flat.sku) !== null && _v !== void 0 ? _v : null,
             purchase_unit: (_w = flat.purchase_unit) !== null && _w !== void 0 ? _w : null,
             unit: (_x = flat.unit) !== null && _x !== void 0 ? _x : null,
+            product_type: (_y = flat.product_type) !== null && _y !== void 0 ? _y : null,
         }
         : undefined;
     const pkg = typeof flat.pieces_per_unit === "number"
@@ -390,6 +393,7 @@ function mapTemplateV3Row(raw) {
     const get = (k) => sanitizeString(raw[k]);
     const flat = {
         generic_name: get("Generic (International Name)"),
+        product_type: (get("Product Type") || "").toLowerCase() || null,
         strength: get("Strength"),
         form: canonicalizeForm(get("Dosage Form")),
         category: get("Product Category") || null,
@@ -455,6 +459,8 @@ function mapCsvGenericRow(raw) {
                 return "pieces_per_unit";
             case "unit":
                 return "unit";
+            case "product_type":
+                return "product_type";
             default:
                 return undefined;
         }
@@ -482,6 +488,9 @@ function mapCsvGenericRow(raw) {
                 break;
             case "form":
                 flat.form = canonicalizeForm(sanitizeString(val));
+                break;
+            case "product_type":
+                assignField(mapped, sanitizeString(val).toLowerCase());
                 break;
             default:
                 assignField(mapped, sanitizeString(val));

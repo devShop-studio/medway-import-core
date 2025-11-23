@@ -123,27 +123,28 @@ export async function parseProductsFileFromBuffer(
  * Includes packaging mapping to `pkg.pieces_per_unit`.
  * Signed: EyosiyasJ
  */
-function mapCanonToPath(k: any): string {
-  switch (k) {
-    case "generic_name": return "product.generic_name";
-    case "brand_name": return "product.brand_name";
-    case "manufacturer_name": return "product.manufacturer_name";
-    case "strength": return "product.strength";
-    case "form": return "product.form";
-    case "category": return "product.category";
-    case "requires_prescription": return "product.requires_prescription";
-    case "expiry_date": return "batch.expiry_date";
-    case "batch_no": return "batch.batch_no";
-    case "on_hand": return "batch.on_hand";
-    case "unit_price": return "batch.unit_price";
-    case "coo": return "identity.coo";
-    case "sku": return "identity.sku";
-    case "cat": return "identity.cat";
-    case "frm": return "identity.frm";
-    case "pkg": return "identity.pkg";
-    case "purchase_unit": return "identity.purchase_unit";
-    case "pieces_per_unit": return "pkg.pieces_per_unit";
-    case "unit": return "identity.unit";
-    default: return String(k);
+  function mapCanonToPath(k: any): string {
+    switch (k) {
+      case "generic_name": return "product.generic_name";
+      case "brand_name": return "product.brand_name";
+      case "manufacturer_name": return "product.manufacturer_name";
+      case "strength": return "product.strength";
+      case "form": return "product.form";
+      case "category": return "product.category";
+      case "requires_prescription": return "product.requires_prescription";
+      case "expiry_date": return "batch.expiry_date";
+      case "batch_no": return "batch.batch_no";
+      case "on_hand": return "batch.on_hand";
+      case "unit_price": return "batch.unit_price";
+      case "coo": return "identity.coo";
+      case "sku": return "identity.sku";
+      case "cat": return "identity.cat";
+      case "frm": return "identity.frm";
+      case "pkg": return "identity.pkg";
+      case "purchase_unit": return "identity.purchase_unit";
+      case "pieces_per_unit": return "pkg.pieces_per_unit";
+      case "unit": return "identity.unit";
+      case "product_type": return "identity.product_type";
+      default: return String(k);
+    }
   }
-}

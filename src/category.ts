@@ -1170,3 +1170,32 @@ export interface UmbrellaClassificationInput {
  * - Text-based classification (`classifyUmbrellaCategory`) with weighted signals and guardrails.
  * Signed: EyosiyasJ
  */
+/**
+ * NON_MEDICINE_KEYWORDS
+ * Keyword library for auto-suggesting Product Type = non-medicine and choosing
+ * category among Accessories vs Chemicals & Reagents.
+ * Signed: EyosiyasJ
+ */
+export const NON_MEDICINE_KEYWORDS: {
+  accessories: string[];
+  chemicalsAndReagents: string[];
+} = {
+  accessories: [
+    "syringe","syringe 2ml","syringe 3ml","syringe 5ml","syringe 10ml","insulin syringe",
+    "needle","hypodermic needle","iv cannula","iv catheter","iv set","infusion set","giving set","butterfly needle",
+    "glove","latex glove","nitrile glove","surgical glove","exam glove","face mask","surgical mask","n95 mask","respirator mask","disposable mask","face shield","protective gown","apron","cap","surgical cap",
+    "gauze","gauze swab","gauze roll","cotton","cotton wool","cotton roll","bandage","crepe bandage","elastic bandage","plaster","adhesive plaster","adhesive bandage","band aid","wound dressing","sterile dressing","surgical tape","micropore tape",
+    "pregnancy test","pregnancy test kit","ovulation test","hiv test kit","rapid test kit","malaria test kit","test strip","glucose test strip","urine strip","ketone strip","lancet","finger lancet",
+    "pill organizer","pill box","pill cutter","medicine spoon","medicine cup","dropper","eye wash cup","urine container","specimen container","urine bag","catheter bag","stoma bag","hot water bag","hot water bottle","ice pack","gel pack","disposable syringe box","sharps container","surgical blade","scalpel blade","tongue depressor","wooden tongue depressor","ear plug","eye shield","nasal spray bottle","thermometer","clinical thermometer","digital thermometer",
+    "bp machine","blood pressure monitor","sphygmomanometer","stethoscope","glucometer","blood glucose meter","nebulizer","nebulizer kit","pulse oximeter","oximeter","weighing scale","baby scale","heating pad","electric heating pad","inhaler spacer","spacer device",
+    "adult diaper","baby diaper","sanitary pad","sanitary napkin","panty liner","incontinence pad","condom","male condom","female condom","lubricant gel","mouthwash","hand sanitizer",
+  ],
+  chemicalsAndReagents: [
+    "hydrogen peroxide","hydrogen peroxide 3%","methylated spirit","spirit","rubbing alcohol","isopropyl alcohol","isopropanol","ethyl alcohol","ethanol",
+    "disinfectant solution","chlorhexidine solution","povidone iodine","iodine solution","tincture of iodine",
+    "saline solution","sodium chloride solution","distilled water","purified water",
+    "glycerin","glycerine","glycerol","liquid paraffin","paraffin oil","white soft paraffin","petroleum jelly",
+    "boric acid","boric acid solution","benzalkonium chloride solution","sodium hypochlorite","bleach solution","potassium permanganate","formalin",
+    "acetic acid","vinegar solution","buffer solution","reagent kit","lab reagent","indicator solution",
+  ],
+};

@@ -6,6 +6,7 @@ import { decomposeConcatenatedCell } from "./concatDecompose.js";
 
 const TEMPLATE_V3_HEADERS = [
   "Generic (International Name)",
+  "Product Type",
   "Strength",
   "Dosage Form",
   "Product Category",
@@ -47,7 +48,7 @@ const LEGACY_ITEMS_HEADERS = [
 ];
 
 const TEMPLATE_VERSION = "MedWay_Template_v3";
-const TEMPLATE_CHECKSUM = "b6ba6708";
+const TEMPLATE_CHECKSUM = "f9802bc8";
 
 type CanonicalFlat = {
   generic_name?: string;
@@ -72,6 +73,7 @@ type CanonicalFlat = {
   purchase_unit?: string | null;
   pieces_per_unit?: number | string | null;
   unit?: string | null;
+  product_type?: string | null;
 };
 
 const HEADER_SYNONYMS: Record<keyof CanonicalFlat, string[]> = {
@@ -104,7 +106,6 @@ const HEADER_SYNONYMS: Record<keyof CanonicalFlat, string[]> = {
     "dosage_form",
     "product_form",
     "type",
-    "product_type",
     "dose_form",
   ],
   category: [
@@ -159,6 +160,7 @@ const HEADER_SYNONYMS: Record<keyof CanonicalFlat, string[]> = {
   purchase_unit: ["purchase_unit", "pack", "box", "carton"],
   pieces_per_unit: ["pieces_per_unit", "pieces", "units_per_pack", "units_per_box"],
   unit: ["unit", "uom", "unit_of_measure"],
+  product_type: ["product_type"],
 };
 
 const FORM_SYNONYMS: Record<string, string> = {
@@ -439,7 +441,8 @@ function ensureCanonical(flat: CanonicalFlat): Partial<CanonicalProduct> {
     flat.coo ||
     flat.sku ||
     flat.purchase_unit ||
-    flat.unit
+    flat.unit ||
+    flat.product_type
       ? {
           cat: flat.cat ?? null,
           frm: flat.frm ?? null,
@@ -448,6 +451,7 @@ function ensureCanonical(flat: CanonicalFlat): Partial<CanonicalProduct> {
           sku: flat.sku ?? null,
           purchase_unit: flat.purchase_unit ?? null,
           unit: flat.unit ?? null,
+          product_type: flat.product_type ?? null,
         }
       : undefined;
   const pkg =
@@ -461,6 +465,7 @@ function mapTemplateV3Row(raw: RawRow): Partial<CanonicalProduct> {
   const get = (k: string) => sanitizeString(raw[k]);
   const flat: CanonicalFlat = {
     generic_name: get("Generic (International Name)"),
+    product_type: (get("Product Type") || "").toLowerCase() || null,
     strength: get("Strength"),
     form: canonicalizeForm(get("Dosage Form")),
     category: get("Product Category") || null,
@@ -526,6 +531,8 @@ function mapCsvGenericRow(raw: RawRow): Partial<CanonicalProduct> {
         return "pieces_per_unit";
       case "unit":
         return "unit";
+      case "product_type":
+        return "product_type";
       default:
         return undefined;
     }
@@ -553,6 +560,9 @@ function mapCsvGenericRow(raw: RawRow): Partial<CanonicalProduct> {
         break;
       case "form":
         flat.form = canonicalizeForm(sanitizeString(val));
+        break;
+      case "product_type":
+        assignField(mapped, sanitizeString(val).toLowerCase());
         break;
       default:
         assignField(mapped, sanitizeString(val));

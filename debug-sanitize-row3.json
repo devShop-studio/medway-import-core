@@ -1,0 +1,21 @@
+{
+  "product": {
+    "generic_name": "IBUPROFEN",
+    "brand_name": "NA",
+    "manufacturer_name": "NA",
+    "strength": "",
+    "form": "tablet",
+    "category": "NA",
+    "requires_prescription": null,
+    "is_controlled": null,
+    "storage_conditions": "NA",
+    "description": "NA"
+  },
+  "batch": {
+    "batch_no": "NA",
+    "expiry_date": "2027-03-05",
+    "on_hand": 1,
+    "unit_price": null,
+    "coo": null
+  }
+}

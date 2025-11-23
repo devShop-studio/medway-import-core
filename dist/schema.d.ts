@@ -23,6 +23,7 @@ type CanonicalFlat = {
     purchase_unit?: string | null;
     pieces_per_unit?: number | string | null;
     unit?: string | null;
+    product_type?: string | null;
 };
 /**
  * Detect input schema from headers and optional template metadata.

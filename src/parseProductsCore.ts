@@ -189,6 +189,10 @@ export function parseProductsCore(
           }
           if (parts.strength) applyExtractionToCanonical(mapped, { field: "product.strength", value: parts.strength });
           if (parts.form) applyExtractionToCanonical(mapped, { field: "product.form", value: parts.form });
+          const { extractions } = decomposeConcatenatedCell(nameRaw, { mode: "opportunistic", minSignals: 2 });
+          if (extractions.length) {
+            for (const ex of extractions) applyExtractionToCanonical(mapped, ex, nameRaw);
+          }
         }
       }
       // Full mode: run heavy concat decomposition on flagged columns and fallbacks
@@ -362,6 +366,7 @@ const FLAT_KEY_TO_PATH: Record<string, string> = {
   purchase_unit: "identity.purchase_unit",
   pieces_per_unit: "pkg.pieces_per_unit",
   unit: "identity.unit",
+  product_type: "identity.product_type",
 };
 
 const CANONICAL_KEY_TO_FLAT: Partial<Record<CanonicalKey, keyof typeof FLAT_KEY_TO_PATH>> = {
@@ -385,6 +390,7 @@ const CANONICAL_KEY_TO_FLAT: Partial<Record<CanonicalKey, keyof typeof FLAT_KEY_
   purchase_unit: "purchase_unit",
   pieces_per_unit: "pieces_per_unit",
   unit: "unit",
+  product_type: "product_type",
 };
 
 const TEXTUAL_TARGETS = new Set([
@@ -415,6 +421,8 @@ function assignLeftoverText(
 ) {
   const text = String(raw ?? "").trim();
   if (!text) return;
+  const UNIT_RE = /\b(mg|mcg|g|kg|ml|l|iu|%|w\/v|w\/w|v\/v)\b/i;
+  const HAS_DIGIT_RE = /\d/;
   const defaultRoute = () => {
     const prod = ensureProductContainer(target);
     const current = prod.generic_name ?? "";
@@ -435,8 +443,13 @@ function assignLeftoverText(
   const prod = ensureProductContainer(target);
   switch (targetPath) {
     case "product.description": {
-      const shouldReplace = sourceValue && (prod.description ?? "").trim() === String(sourceValue).trim();
-      prod.description = shouldReplace || !(prod.description ?? "").trim() ? text : `${prod.description} ${text}`;
+      const curr = (prod.description ?? "").trim();
+      const shouldReplace = sourceValue && curr === String(sourceValue).trim();
+      if (curr && curr.trim().toLowerCase() === text.toLowerCase()) {
+        prod.description = curr;
+      } else {
+        prod.description = shouldReplace || !curr ? text : `${prod.description} ${text}`;
+      }
       if (!prod.generic_name || !String(prod.generic_name).trim()) {
         prod.generic_name = text;
       }
@@ -457,7 +470,12 @@ function assignLeftoverText(
       const current = prod.manufacturer_name ?? "";
       const shouldReplace = sourceValue && current && String(current).trim() === String(sourceValue).trim();
       if (!current || !String(current).trim() || shouldReplace) {
-        prod.manufacturer_name = text;
+        if (!HAS_DIGIT_RE.test(text) && !UNIT_RE.test(text)) {
+          prod.manufacturer_name = text;
+        } else {
+          const desc = (prod.description ?? "").trim();
+          prod.description = desc ? `${desc} ${text}` : text;
+        }
       }
       if (!prod.generic_name || !String(prod.generic_name).trim()) {
         prod.generic_name = text;
@@ -468,7 +486,12 @@ function assignLeftoverText(
       const current = prod.category ?? "";
       const shouldReplace = sourceValue && current && String(current).trim() === String(sourceValue).trim();
       if (!current || !String(current).trim() || shouldReplace) {
-        prod.category = text;
+        if (!HAS_DIGIT_RE.test(text) && !UNIT_RE.test(text)) {
+          prod.category = text;
+        } else {
+          const desc = (prod.description ?? "").trim();
+          prod.description = desc ? `${desc} ${text}` : text;
+        }
       }
       return;
     }

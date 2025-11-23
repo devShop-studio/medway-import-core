@@ -128,7 +128,11 @@ export declare function sanitizePackageCode(v: unknown): {
     value?: string;
     issues: Issue[];
 };
-export declare function sanitizeRow(input: CanonicalRowInput): {
+/**
+ * Sanitize a loosely-typed canonical row with schema-aware invariants.
+ * Signed: EyosiyasJ
+ */
+export declare function sanitizeRow(input: CanonicalRowInput, schema?: SourceSchema): {
     row: SanitizedRow;
     issues: Issue[];
 };

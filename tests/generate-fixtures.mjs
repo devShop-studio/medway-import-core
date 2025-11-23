@@ -31,6 +31,7 @@ function genTemplateClean(baseDir) {
   const file = path.join(baseDir, "template_clean.xlsx");
   const header = [
     "Generic (International Name)",
+    "Product Type",
     "Strength",
     "Dosage Form",
     "Product Category",
@@ -46,11 +47,11 @@ function genTemplateClean(baseDir) {
     "Notes",
   ];
   const rows = [
-    ["Paracetamol","500mg","tablet","Analgesics","31/12/2099","30TAB","B100",100,1.2,"India","SN1","BrandA","MakerA",""],
-    ["Amoxicillin","250mg","capsule","Antibiotic","30/11/2030","20CAP","B200",50,2.5,"Ethiopia","SN2","BrandB","MakerB",""],
-    ["Salbutamol","2mg/5ml","syrup","Respiratory","01/01/2031","1BTL","B300",25,3.75,"USA","SN3","BrandC","MakerC",""],
+    ["Paracetamol","medicine","500mg","tablet","Analgesics","31/12/2099","30TAB","B100",100,1.2,"India","SN1","BrandA","MakerA",""],
+    ["Amoxicillin","medicine","250mg","capsule","Antibiotic","30/11/2030","20CAP","B200",50,2.5,"Ethiopia","SN2","BrandB","MakerB",""],
+    ["Salbutamol","medicine","2mg/5ml","syrup","Respiratory","01/01/2031","1BTL","B300",25,3.75,"USA","SN3","BrandC","MakerC",""],
   ];
-  const metaSheets = [{ name: "__meta", rows: [["template_version","MedWay_Template_v3"],["header_checksum","b6ba6708"]] }];
+  const metaSheets = [{ name: "__meta", rows: [["template_version","MedWay_Template_v3"],["header_checksum","f9802bc8"]] }];
   writeXlsx(file, "Products", header, rows, metaSheets);
 }
 

@@ -25,7 +25,8 @@ export type CanonicalKey =
   | "purchase_unit"
   | "pieces_per_unit"
   | "unit"
-  | "reserved";
+  | "reserved"
+  | "product_type";
 
 interface CanonicalDef {
   key: CanonicalKey;
@@ -56,6 +57,7 @@ const defs: CanonicalDef[] = [
   { key: "pieces_per_unit", type: "number", synonyms: ["pieces per unit", "pieces", "units per pack", "units per box"] },
   { key: "unit", type: "text", synonyms: ["unit", "measure", "uom", "unit of measure"] },
   { key: "reserved", type: "number", synonyms: ["reserved", "hold", "on reserve"] },
+  { key: "product_type", type: "text", synonyms: ["product type", "product_type" ] },
 ];
 
 const strongTokens = new Set(["batch", "lot", "expiry", "expiration", "country", "price", "quantity", "qty", "stock", "form", "strength"]);

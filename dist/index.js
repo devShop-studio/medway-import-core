@@ -135,6 +135,7 @@ function mapCanonToPath(k) {
         case "purchase_unit": return "identity.purchase_unit";
         case "pieces_per_unit": return "pkg.pieces_per_unit";
         case "unit": return "identity.unit";
+        case "product_type": return "identity.product_type";
         default: return String(k);
     }
 }
